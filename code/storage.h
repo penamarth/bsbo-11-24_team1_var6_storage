@@ -7,14 +7,22 @@
 class StorageLocation;
 class Product;
 
+// Статус партии товара.
+enum class BatchStatus { Received, Stored, InBuffer, Reserved, Depleted, Shipped };
+
 class GoodsBatch {
 public:
     GoodsBatch(int id, double volume, std::string productName, int quantity = 0, Product* product = nullptr);
 
     void receive();
-    void reserveQuantity(int quantity);
-    void decreaseQuantity(int quantity);
+    bool reserveQuantity(int quantity);
+    void decreaseQuantity(int quantity, bool fromReserve = false);
+    void changeQuantity(int newQuantity);
     int getAvailableQuantity() const;
+    void updateStatus();
+    void printInfo(const std::string& indent = "") const;
+
+    static const char* statusText(BatchStatus status);
 
     int id;
     double volume;
@@ -23,6 +31,12 @@ public:
     int reservedQuantity = 0;
     Product* product = nullptr;
     StorageLocation* location = nullptr;
+    BatchStatus status = BatchStatus::Received;
+
+private:
+    void updateVolume();
+
+    double unitVolume_ = 0.0;
 };
 
 // Абстрактный общий класс только для непосредственных мест хранения.
@@ -33,11 +47,13 @@ public:
     virtual bool hasSpace(double volume) const = 0;
     virtual double getAvailableVolume() const = 0;
     virtual bool placeBatch(const std::shared_ptr<GoodsBatch>& batch) = 0;
-    virtual void removeBatch(GoodsBatch* batch) = 0;
+    virtual bool removeBatch(GoodsBatch* batch) = 0;
     virtual void inventory() const = 0;
+    virtual std::string getTitle() const = 0;
 
 protected:
     static bool isValidVolume(double volume);
+    static double sumVolume(const std::vector<std::shared_ptr<GoodsBatch>>& batches);
 };
 
 // Ячейка и буферная зона — единственные классы-наследники StorageLocation.
@@ -48,22 +64,27 @@ public:
     bool hasSpace(double volume) const override;
     double getAvailableVolume() const override;
     bool placeBatch(const std::shared_ptr<GoodsBatch>& batch) override;
-    void removeBatch(GoodsBatch* batch) override;
+    bool removeBatch(GoodsBatch* batch) override;
     void inventory() const override;
+    std::string getTitle() const override;
 
-    void reserveSpace(double volume);
+    bool reserveSpace(double volume);
     void releaseSpace(double volume);
-    const std::vector<std::shared_ptr<GoodsBatch>>& getBatches() const;
 
+    // Геттеры ничего не печатают — они нужны для строки состояния меню.
+    const std::vector<std::shared_ptr<GoodsBatch>>& getBatches() const;
     int getId() const;
     const std::string& getAddress() const;
+    double getCapacity() const;
+    double getUsedVolume() const;
     double getReservedVolume() const;
 
 private:
+    double freeVolume() const;
+
     int id_;
     std::string address_;
     double capacity_;
-    double currentVolume_ = 0.0;
     double reservedVolume_ = 0.0;
     std::vector<std::shared_ptr<GoodsBatch>> batches_;
 };
@@ -75,17 +96,20 @@ public:
     bool hasSpace(double volume) const override;
     double getAvailableVolume() const override;
     bool placeBatch(const std::shared_ptr<GoodsBatch>& batch) override;
-    void removeBatch(GoodsBatch* batch) override;
+    bool removeBatch(GoodsBatch* batch) override;
     void inventory() const override;
+    std::string getTitle() const override;
 
+    const std::vector<std::shared_ptr<GoodsBatch>>& getBatches() const;
     int getId() const;
     const std::string& getName() const;
+    double getCapacity() const;
+    double getUsedVolume() const;
 
 private:
     int id_;
     std::string name_;
     double capacity_;
-    double currentVolume_ = 0.0;
     std::vector<std::shared_ptr<GoodsBatch>> batches_;
 };
 
@@ -98,7 +122,7 @@ public:
     bool hasSpace(double volume) const;
     double getAvailableVolume() const;
     bool placeBatch(const std::shared_ptr<GoodsBatch>& batch);
-    void removeBatch(GoodsBatch* batch);
+    bool removeBatch(GoodsBatch* batch);
     void inventory() const;
 
     int getId() const;
@@ -120,7 +144,7 @@ public:
     bool hasSpace(double volume) const;
     double getAvailableVolume() const;
     bool placeBatch(const std::shared_ptr<GoodsBatch>& batch);
-    void removeBatch(GoodsBatch* batch);
+    bool removeBatch(GoodsBatch* batch);
     void inventory() const;
 
     int getId() const;
@@ -133,18 +157,21 @@ private:
     std::vector<std::unique_ptr<Shelf>> shelves_;
 };
 
-// Warehouse — верхний объект композиции: содержит шкафы и агрегирует буферные зоны.
+// Warehouse — верхний объект композиции: содержит шкафы и буферные зоны.
 class Warehouse final {
 public:
     Warehouse(int id, std::string name, std::string address);
 
     void addCabinet(std::unique_ptr<StorageCabinet> cabinet);
-    void addBufferZone(std::unique_ptr<BufferZone> bufferZone);
+    BufferZone* addBufferZone(std::unique_ptr<BufferZone> bufferZone);
     bool placeBatch(const std::shared_ptr<GoodsBatch>& batch);
     StorageCell* findFreeCell(double volume) const;
+    std::vector<std::shared_ptr<GoodsBatch>> findBatches(const std::string& productName) const;
     double getAvailableVolume() const;
     void inventory() const;
 
+    // Геттеры без вывода в консоль.
+    std::vector<StorageCell*> getAllCells() const;
     int getId() const;
     const std::string& getName() const;
     const std::string& getAddress() const;
@@ -158,7 +185,3 @@ private:
     std::vector<std::unique_ptr<StorageCabinet>> cabinets_;
     std::vector<std::unique_ptr<BufferZone>> bufferZones_;
 };
-
-// Совместимость с первоначальным кодом друга.
-using Cabinet = StorageCabinet;
-using Cell = StorageCell;

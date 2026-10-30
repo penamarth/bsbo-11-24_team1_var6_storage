@@ -17,16 +17,31 @@ public:
     void runOrderScenario();
     void runStocktakeScenario();
     void runShipmentScenario();
-    void showNotifications() const;
+    void showNotifications();
 
 private:
-    void printClassChain(const std::string& chain) const;
+    // Вывод на экран.
     void printMenu() const;
-    int readMenuChoice() const;
-    void pauseAfterScenario() const;
-    Product* getDemoProduct(std::size_t index) const;
+    void printStatusBar() const;
+    void printScenarioTitle(const std::string& title) const;
+    void printClassChain(const std::vector<std::string>& chain) const;
+    void printProducts() const;
+
+    // Ввод с клавиатуры: Enter без числа подставляет значение по умолчанию.
+    bool readLine(std::string& line);
+    int readMenuChoice();
+    int readInt(const std::string& prompt, int minValue, int maxValue, int defaultValue);
+    Product* chooseProduct(int defaultNumber);
+    void waitForEnter();
+
+    void addNotification(const std::string& message, const std::string& type, const std::string& role);
+    int countReadyOrders() const;
+    int countUnreadNotifications() const;
 
     std::unique_ptr<Warehouse> warehouse_;
+    BufferZone* receivingZone_ = nullptr;
+    BufferZone* shippingZone_ = nullptr;
+
     std::vector<std::unique_ptr<Product>> products_;
     std::vector<std::shared_ptr<Delivery>> deliveries_;
     std::vector<std::unique_ptr<WarehouseOrder>> orders_;
@@ -34,8 +49,11 @@ private:
     std::vector<std::unique_ptr<Shipment>> shipments_;
     std::vector<std::unique_ptr<Notification>> notifications_;
 
-    std::shared_ptr<GoodsBatch> demoBatch_;
-    StorageCell* demoCell_ = nullptr;
-    WarehouseOrder* demoOrder_ = nullptr;
+    std::string menuMessage_;    // сообщение под меню (например, об ошибке ввода)
+    bool inputClosed_ = false;   // ввод закончился (Ctrl+D / конец файла)
     int nextId_ = 100;
+    int deliveryCounter_ = 0;
+    int orderCounter_ = 0;
+    int shipmentCounter_ = 0;
+    int stocktakeCounter_ = 0;
 };

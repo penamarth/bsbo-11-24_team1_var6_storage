@@ -6,7 +6,6 @@
 #include <string>
 #include <vector>
 
-enum class BatchStatus { Received, Stored, Reserved, Depleted };
 enum class DeliveryNoteStatus { Created, Expected, Received, Completed, Discrepancy };
 enum class DeliveryStatus { Expected, Arrived, Accepted, Discrepancy };
 enum class OrderStatus { Created, Picking, Completed, Shipped };
@@ -20,6 +19,7 @@ public:
     void printInfo() const;
     int getId() const;
     const std::string& getName() const;
+    const std::string& getSku() const;
     double getUnitVolume() const;
 
 private:
@@ -54,8 +54,6 @@ private:
     StorageCell* storageCell_ = nullptr;
 };
 
-class Delivery;
-
 class DeliveryNote {
 public:
     DeliveryNote(int id, std::string number, std::string date, std::string dueDate);
@@ -66,6 +64,7 @@ public:
     void printInfo() const;
 
     const std::vector<std::unique_ptr<DeliveryNoteItem>>& getItems() const;
+    const std::string& getNumber() const;
     DeliveryNoteStatus getStatus() const;
 
 private:
@@ -102,18 +101,21 @@ public:
     void pick(int quantity);
     bool isComplete() const;
     void addBatch(const std::shared_ptr<GoodsBatch>& batch);
+    void setPickedBatch(const std::shared_ptr<GoodsBatch>& batch);
     void printInfo() const;
 
     Product* getProduct() const;
     int getQuantity() const;
     int getPickedQuantity() const;
+    const std::shared_ptr<GoodsBatch>& getPickedBatch() const;
 
 private:
     int id_;
     int quantity_;
     int pickedQuantity_ = 0;
     Product* product_;
-    std::vector<std::shared_ptr<GoodsBatch>> batches_;
+    std::vector<std::shared_ptr<GoodsBatch>> batches_;   // партии, из которых отобран товар
+    std::shared_ptr<GoodsBatch> pickedBatch_;            // собранный товар в зоне отгрузки
 };
 
 class WarehouseOrder {
@@ -121,11 +123,16 @@ public:
     explicit WarehouseOrder(int id);
 
     OrderItem* addItem(std::unique_ptr<OrderItem> item);
+    void startPicking();
     bool checkCompleteness() const;
     void complete();
+    void ship();
     void printInfo() const;
 
+    static const char* statusText(OrderStatus status);
+
     const std::vector<std::unique_ptr<OrderItem>>& getItems() const;
+    int getId() const;
     OrderStatus getStatus() const;
 
 private:
@@ -142,6 +149,9 @@ public:
     int calculateDifference();
     bool isCorrect() const;
     void printInfo() const;
+
+    int getDifference() const;
+    int getActualQuantity() const;
 
 private:
     int id_;
@@ -177,6 +187,8 @@ public:
     bool isCorrect() const;
     void printInfo() const;
 
+    OrderItem* getOrderItem() const;
+
 private:
     int id_;
     int expectedQuantity_;
@@ -191,7 +203,7 @@ public:
 
     ShipmentItem* addItem(std::unique_ptr<ShipmentItem> item);
     bool checkReadiness() const;
-    void dispatch();
+    bool dispatch();
     void printInfo() const;
 
 private:
@@ -208,6 +220,7 @@ public:
     void send() const;
     void markAsRead();
     void printInfo() const;
+    bool isRead() const;
 
 private:
     int id_;
