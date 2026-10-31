@@ -100,7 +100,7 @@ DeliveryNoteItem::DeliveryNoteItem(int id, Product* product, int expectedQuantit
 
 void DeliveryNoteItem::setActualQuantity(int quantity) {
     actualQuantity_ = quantity;
-    std::cout << "DeliveryNoteItem::setActualQuantity: фактически получено " << quantity << " шт.\n";
+    std::cout << "DeliveryNoteItem::setActualQuantity: фактическое количество — " << quantity << " шт.\n";
 }
 
 void DeliveryNoteItem::setStorageCell(StorageCell* cell, double reservedVolume) {
@@ -153,7 +153,7 @@ DeliveryNote::DeliveryNote(int id, std::string number, std::string type, std::st
     : id_(id), number_(std::move(number)), date_(currentDate()), dueDate_(std::move(dueDate)),
       type_(std::move(type)) {
     std::cout << "DeliveryNote::DeliveryNote: накладная " << number_ << " (" << type_
-              << ") создана, срок поставки " << dueDate_ << ".\n";
+              << ") создана, срок " << dueDate_ << ".\n";
 }
 
 DeliveryNoteItem* DeliveryNote::addItem(std::unique_ptr<DeliveryNoteItem> item) {
@@ -211,6 +211,7 @@ const char* DeliveryNote::statusText(DeliveryNoteStatus status) {
 const std::vector<std::unique_ptr<DeliveryNoteItem>>& DeliveryNote::getItems() const { return items_; }
 const std::string& DeliveryNote::getNumber() const { return number_; }
 const std::string& DeliveryNote::getDueDate() const { return dueDate_; }
+const std::string& DeliveryNote::getType() const { return type_; }
 DeliveryNoteStatus DeliveryNote::getStatus() const { return status_; }
 Delivery* DeliveryNote::getDelivery() const { return delivery_; }
 
@@ -258,6 +259,12 @@ OrderItem::OrderItem(int id, Product* product, int quantity)
 void OrderItem::pick(int quantity) {
     pickedQuantity_ += quantity;
     std::cout << "OrderItem::pick: отобрано " << quantity << " шт., всего "
+              << pickedQuantity_ << " из " << quantity_ << " шт.\n";
+}
+
+void OrderItem::cancelPick(int quantity) {
+    pickedQuantity_ = std::max(0, pickedQuantity_ - quantity);
+    std::cout << "OrderItem::cancelPick: " << quantity << " шт. не дошли до отгрузки, отобрано "
               << pickedQuantity_ << " из " << quantity_ << " шт.\n";
 }
 
@@ -470,6 +477,11 @@ ShipmentItem::ShipmentItem(int id, Product* product, OrderItem* orderItem,
               << expectedQuantity_ << ", подготовлено " << actualQuantity_ << " шт.\n";
 }
 
+void ShipmentItem::setActualQuantity(int quantity) {
+    actualQuantity_ = quantity;
+    std::cout << "ShipmentItem::setActualQuantity: подготовлено к отгрузке " << quantity << " шт.\n";
+}
+
 int ShipmentItem::calculateDifference() const {
     const int result = actualQuantity_ - expectedQuantity_;
     std::cout << "ShipmentItem::calculateDifference: расхождение — " << result << " шт.\n";
@@ -541,6 +553,9 @@ bool Shipment::dispatch() {
     }
 
     warehouseOrder_->ship();
+    if (outgoingNote_) {
+        outgoingNote_->setStatus(DeliveryNoteStatus::Completed);
+    }
     status_ = ShipmentStatus::Shipped;
     std::cout << "Shipment::dispatch: отгрузка #" << id_ << " выполнена " << date_ << ".\n";
     return true;
@@ -554,3 +569,10 @@ void Shipment::printInfo() const {
 
 const std::vector<std::unique_ptr<ShipmentItem>>& Shipment::getItems() const { return items_; }
 WarehouseOrder* Shipment::getOrder() const { return warehouseOrder_; }
+const std::shared_ptr<DeliveryNote>& Shipment::getDeliveryNote() const { return outgoingNote_; }
+
+void Shipment::setDeliveryNote(const std::shared_ptr<DeliveryNote>& note) {
+    outgoingNote_ = note;
+    std::cout << "Shipment::setDeliveryNote: к отгрузке #" << id_ << " привязана накладная "
+              << note->getNumber() << ".\n";
+}

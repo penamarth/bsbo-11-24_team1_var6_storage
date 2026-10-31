@@ -51,6 +51,8 @@ private:
     void addNotification(const std::string& message, const std::string& type, const std::string& role);
     std::vector<std::shared_ptr<DeliveryNote>> getExpectedNotes() const;
     std::shared_ptr<DeliveryNote> chooseExpectedNote();
+    bool prepareItem(DeliveryNote& note, DeliveryNoteItem* item, std::string& prepared);
+    void scanProduct(const Product* product);
     int countFreeUnits(double unitVolume) const;
     std::vector<WarehouseOrder*> getOrdersWithStatus(OrderStatus status) const;
     int countUnreadNotifications() const;
@@ -74,5 +76,6 @@ private:
     int deliveryCounter_ = 0;
     int orderCounter_ = 0;
     int shipmentCounter_ = 0;
+    int outgoingCounter_ = 0;
     int stocktakeCounter_ = 0;
 };

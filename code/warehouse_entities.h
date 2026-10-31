@@ -103,6 +103,7 @@ public:
     const std::vector<std::unique_ptr<DeliveryNoteItem>>& getItems() const;
     const std::string& getNumber() const;
     const std::string& getDueDate() const;
+    const std::string& getType() const;
     DeliveryNoteStatus getStatus() const;
     Delivery* getDelivery() const;
 
@@ -141,6 +142,7 @@ public:
     OrderItem(int id, Product* product, int quantity);
 
     void pick(int quantity);
+    void cancelPick(int quantity);
     bool isComplete() const;
     void addBatch(const std::shared_ptr<GoodsBatch>& batch);
     void setPickedBatch(const std::shared_ptr<GoodsBatch>& batch);
@@ -232,6 +234,7 @@ public:
     ShipmentItem(int id, Product* product, OrderItem* orderItem,
                  int expectedQuantity, int actualQuantity);
 
+    void setActualQuantity(int quantity);
     int calculateDifference() const;
     bool isCorrect() const;
     std::unique_ptr<Notification> createNotification(int id) const;
@@ -256,13 +259,17 @@ public:
     bool dispatch();
     void printInfo() const;
 
+    void setDeliveryNote(const std::shared_ptr<DeliveryNote>& note);
+
     const std::vector<std::unique_ptr<ShipmentItem>>& getItems() const;
     WarehouseOrder* getOrder() const;
+    const std::shared_ptr<DeliveryNote>& getDeliveryNote() const;
 
 private:
     int id_;
     std::string date_;
     ShipmentStatus status_ = ShipmentStatus::Created;
     WarehouseOrder* warehouseOrder_;
+    std::shared_ptr<DeliveryNote> outgoingNote_;   // исходящая (расходная) накладная
     std::vector<std::unique_ptr<ShipmentItem>> items_;
 };
