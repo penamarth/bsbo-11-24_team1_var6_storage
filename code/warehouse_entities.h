@@ -52,6 +52,12 @@ private:
     bool isRead_ = false;
 };
 
+// Резерв места в одной ячейке под позицию накладной.
+struct CellReservation {
+    StorageCell* cell;
+    double volume;
+};
+
 class DeliveryNoteItem {
 public:
     DeliveryNoteItem(int id, Product* product, int expectedQuantity);
@@ -66,18 +72,16 @@ public:
     Product* getProduct() const;
     int getExpectedQuantity() const;
     int getActualQuantity() const;
-    StorageCell* getStorageCell() const;
+    const std::vector<CellReservation>& getReservations() const;
     double getReservedVolume() const;
-    bool isRejected() const;
 
 private:
     int id_;
     int expectedQuantity_;
     int actualQuantity_ = 0;
-    double reservedVolume_ = 0.0;
     bool rejected_ = false;
     Product* product_;
-    StorageCell* storageCell_ = nullptr;
+    std::vector<CellReservation> reservations_;   // поставка может занять несколько ячеек
 };
 
 class Delivery;
@@ -253,6 +257,7 @@ public:
     void printInfo() const;
 
     const std::vector<std::unique_ptr<ShipmentItem>>& getItems() const;
+    WarehouseOrder* getOrder() const;
 
 private:
     int id_;

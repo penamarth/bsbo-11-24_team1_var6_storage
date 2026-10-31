@@ -77,6 +77,20 @@ int GoodsBatch::getAvailableQuantity() const {
     return result;
 }
 
+std::shared_ptr<GoodsBatch> GoodsBatch::split(int newId, int partQuantity) {
+    if (partQuantity <= 0 || partQuantity >= quantity - reservedQuantity) {
+        std::cout << "GoodsBatch::split: партию #" << id << " нельзя разделить на " << partQuantity << " шт.\n";
+        return nullptr;
+    }
+    quantity -= partQuantity;
+    updateVolume();
+    std::cout << "GoodsBatch::split: от партии #" << id << " отделено " << partQuantity
+              << " шт., в ней осталось " << quantity << " шт.\n";
+    return std::make_shared<GoodsBatch>(newId, unitVolume_ * partQuantity, productName, partQuantity, product);
+}
+
+double GoodsBatch::getUnitVolume() const { return unitVolume_; }
+
 void GoodsBatch::updateStatus() {
     if (quantity <= 0) {
         status = BatchStatus::Depleted;
@@ -470,7 +484,6 @@ bool StorageCabinet::removeBatch(GoodsBatch* batch) {
             return true;
         }
     }
-    std::cout << "StorageCabinet::removeBatch: партия не найдена в шкафу " << number_ << ".\n";
     return false;
 }
 
@@ -525,12 +538,24 @@ bool Warehouse::placeBatch(const std::shared_ptr<GoodsBatch>& batch) {
         std::cout << "Warehouse::placeBatch: пустую партию разместить нельзя.\n";
         return false;
     }
-    StorageCell* cell = findFreeCell(batch->volume);
-    if (cell != nullptr && cell->placeBatch(batch)) {
-        std::cout << "Warehouse::placeBatch: партия размещена на складе.\n";
-        return true;
+    for (const auto& cabinet : cabinets_) {
+        if (cabinet->placeBatch(batch)) {
+            std::cout << "Warehouse::placeBatch: партия размещена на складе.\n";
+            return true;
+        }
     }
     std::cout << "Warehouse::placeBatch: на складе нет свободного места.\n";
+    return false;
+}
+
+bool Warehouse::removeBatch(GoodsBatch* batch) {
+    for (const auto& cabinet : cabinets_) {
+        if (cabinet->removeBatch(batch)) {
+            std::cout << "Warehouse::removeBatch: партия #" << batch->id << " убрана со склада.\n";
+            return true;
+        }
+    }
+    std::cout << "Warehouse::removeBatch: партия не найдена в ячейках склада.\n";
     return false;
 }
 

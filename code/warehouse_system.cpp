@@ -239,6 +239,34 @@ std::vector<std::shared_ptr<DeliveryNote>> WarehouseSystem::getExpectedNotes() c
     return result;
 }
 
+std::shared_ptr<DeliveryNote> WarehouseSystem::chooseExpectedNote() {
+    const std::vector<std::shared_ptr<DeliveryNote>> expected = getExpectedNotes();
+    if (expected.empty()) {
+        std::cout << "Нет ожидаемых поставок. Сначала зарегистрируйте поставку.\n";
+        return nullptr;
+    }
+    std::cout << "Ожидаемые поставки:\n";
+    for (std::size_t index = 0; index < expected.size(); ++index) {
+        std::cout << "  " << (index + 1) << ". " << expected[index]->getNumber()
+                  << ", срок " << expected[index]->getDueDate() << ":";
+        for (const auto& item : expected[index]->getItems()) {
+            std::cout << " «" << item->getProduct()->getName() << "» " << item->getExpectedQuantity() << " шт.;";
+        }
+        std::cout << "\n";
+    }
+    return expected[static_cast<std::size_t>(
+        readInt("Номер в списке", 1, static_cast<int>(expected.size()), 1) - 1)];
+}
+
+int WarehouseSystem::countFreeUnits(double unitVolume) const {
+    int units = 0;
+    for (StorageCell* cell : warehouse_->getAllCells()) {
+        const double freeVolume = cell->getCapacity() - cell->getCurrentVolume() - cell->getReservedVolume();
+        if (freeVolume > 0.0) units += static_cast<int>((freeVolume + 0.0001) / unitVolume);
+    }
+    return units;
+}
+
 std::vector<WarehouseOrder*> WarehouseSystem::getOrdersWithStatus(OrderStatus status) const {
     std::vector<WarehouseOrder*> result;
     for (const auto& order : orders_) {
@@ -285,6 +313,21 @@ void WarehouseSystem::showWarehouseStructure() const {
     printClassChain({"WarehouseSystem", "Warehouse", "StorageCabinet", "Shelf", "StorageCell", "GoodsBatch"});
     std::cout << "WarehouseSystem::showWarehouseStructure: вызывается инвентаризация склада.\n\n";
     warehouse_->inventory();
+
+    // Отобранный по заказам товар уже не в ячейках, но ещё не в зоне отгрузки.
+    bool header = false;
+    for (const auto& order : orders_) {
+        if (order->getStatus() == OrderStatus::Shipped) continue;
+        for (const auto& item : order->getItems()) {
+            if (item->getPickedQuantity() == 0 || item->getPickedBatch()) continue;
+            if (!header) {
+                std::cout << "Отобрано по заказам, ждёт отгрузки:\n";
+                header = true;
+            }
+            std::cout << "  Заказ #" << order->getId() << ": «" << item->getProduct()->getName() << "» "
+                      << item->getPickedQuantity() << " шт.\n";
+        }
+    }
     std::cout << "\n";
     warehouse_->getAvailableVolume();
 }
@@ -297,12 +340,14 @@ void WarehouseSystem::deliveryMenu() {
     std::cout << "  1. Зарегистрировать поставку (оператор)\n";
     std::cout << "  2. Принять поставку (кладовщик)   [ожидается: " << expected << "]\n";
     std::cout << "  3. Проверить сроки поставок\n";
-    const int choice = readInt("Что делаем", 1, 3, expected > 0 ? 2 : 1);
+    std::cout << "  4. Отменить поставку\n";
+    const int choice = readInt("Что делаем", 1, 4, expected > 0 ? 2 : 1);
     std::cout << "\n";
 
     if (choice == 1) registerDelivery();
     else if (choice == 2) receiveDelivery();
-    else checkDeliveryDates();
+    else if (choice == 3) checkDeliveryDates();
+    else cancelDelivery();
 }
 
 void WarehouseSystem::registerDelivery() {
@@ -336,10 +381,27 @@ void WarehouseSystem::registerDelivery() {
         if (cell != nullptr && cell->reserveSpace(volume)) {
             item->setStorageCell(cell, volume);
             prepared += (prepared.empty() ? "" : ", ") + cell->getAddress();
-        } else {
+            continue;
+        }
+
+        // В одну ячейку не помещается — резервируем место в нескольких, если хватает в сумме.
+        const double unit = product->getUnitVolume();
+        if (countFreeUnits(unit) < line.second) {
             addNotification(note->createNotification(
                 nextId_++, "нет места для «" + product->getName() + "» (" + formatVolume(volume) + " м³)",
                 "Оператор"));
+            continue;
+        }
+        std::cout << "WarehouseSystem::registerDelivery: в одну ячейку не помещается, резервируем несколько.\n";
+        int left = line.second;
+        while (left > 0) {
+            cell = warehouse_->findFreeCell(unit);
+            if (cell == nullptr) break;
+            const int fit = std::min(left, static_cast<int>((cell->getAvailableVolume() + 0.0001) / unit));
+            if (fit <= 0 || !cell->reserveSpace(fit * unit)) break;
+            item->setStorageCell(cell, fit * unit);
+            prepared += (prepared.empty() ? "" : ", ") + cell->getAddress();
+            left -= fit;
         }
     }
     note->setStatus(DeliveryNoteStatus::Expected);
@@ -355,23 +417,10 @@ void WarehouseSystem::registerDelivery() {
 void WarehouseSystem::receiveDelivery() {
     printClassChain({"WarehouseSystem", "DeliveryNote", "DeliveryNoteItem", "Delivery", "GoodsBatch", "StorageCell"});
 
-    const std::vector<std::shared_ptr<DeliveryNote>> expected = getExpectedNotes();
-    if (expected.empty()) {
-        std::cout << "Нет поставок, ожидающих приёмки. Сначала зарегистрируйте поставку.\n";
+    const std::shared_ptr<DeliveryNote> note = chooseExpectedNote();
+    if (!note) {
         return;
     }
-
-    std::cout << "Поставки, ожидающие приёмки:\n";
-    for (std::size_t index = 0; index < expected.size(); ++index) {
-        std::cout << "  " << (index + 1) << ". " << expected[index]->getNumber()
-                  << ", срок " << expected[index]->getDueDate() << ":";
-        for (const auto& item : expected[index]->getItems()) {
-            std::cout << " «" << item->getProduct()->getName() << "» " << item->getExpectedQuantity() << " шт.;";
-        }
-        std::cout << "\n";
-    }
-    const std::shared_ptr<DeliveryNote> note = expected[static_cast<std::size_t>(
-        readInt("Номер в списке", 1, static_cast<int>(expected.size()), 1) - 1)];
 
     // Кладовщик вводит фактическое количество; при расхождении оператор решает, что делать.
     std::cout << "Введите фактическое количество (Enter — совпадает с накладной):\n";
@@ -405,9 +454,8 @@ void WarehouseSystem::receiveDelivery() {
 
         item->setActualQuantity(decision.actual);
         const int difference = item->calculateDifference();
-        StorageCell* cell = item->getStorageCell();
-        if (cell != nullptr) {
-            cell->releaseSpace(item->getReservedVolume());   // резерв снимается после приёмки
+        for (const auto& reservation : item->getReservations()) {
+            reservation.cell->releaseSpace(reservation.volume);   // резерв снимается после приёмки
         }
 
         if (!decision.accept) {
@@ -439,6 +487,7 @@ void WarehouseSystem::receiveDelivery() {
         }
     }
 
+    note->setStatus(DeliveryNoteStatus::Received);
     const bool quantityOk = note->checkQuantity();
     if (quantityOk) {
         note->setStatus(DeliveryNoteStatus::Completed);
@@ -454,9 +503,32 @@ void WarehouseSystem::receiveDelivery() {
                         "Размещение", "Кладовщик");
     }
 
+    note->printInfo();
+    delivery->printInfo();
+
     std::cout << "\nИтог: поставка " << note->getNumber() << " — "
               << (quantityOk ? "принята" : "принята с расхождением")
               << "; партий ждут размещения (пункт 3): " << batchesWaiting << ".\n";
+}
+
+void WarehouseSystem::cancelDelivery() {
+    printClassChain({"WarehouseSystem", "DeliveryNote", "DeliveryNoteItem", "StorageCell"});
+    const std::shared_ptr<DeliveryNote> note = chooseExpectedNote();
+    if (!note) {
+        return;
+    }
+
+    printMethodsHeader();
+    std::cout << "WarehouseSystem::cancelDelivery: отмена поставки " << note->getNumber() << ".\n";
+    for (const auto& item : note->getItems()) {
+        for (const auto& reservation : item->getReservations()) {
+            reservation.cell->releaseSpace(reservation.volume);
+        }
+    }
+    addNotification(note->createNotification(nextId_++, "отменена, резерв ячеек снят", "Оператор"));
+    deliveryNotes_.erase(std::remove(deliveryNotes_.begin(), deliveryNotes_.end(), note), deliveryNotes_.end());
+
+    std::cout << "\nИтог: поставка " << note->getNumber() << " отменена.\n";
 }
 
 void WarehouseSystem::checkDeliveryDates() {
@@ -519,13 +591,41 @@ void WarehouseSystem::placeGoods() {
 
         std::cout << "WarehouseSystem::placeGoods: размещение партии #" << batch->id << ".\n";
         StorageCell* cell = warehouse_->findFreeCell(batch->volume);
-        if (cell != nullptr && cell->getAvailableVolume() > 0.0 && cell->placeBatch(batch)) {
+        if (cell != nullptr) {
+            cell->getAvailableVolume();
+            if (cell->placeBatch(batch)) {
+                ++placed;
+                std::cout << "WarehouseSystem::placeGoods: кладовщик подтвердил размещение в ячейке "
+                          << cell->getAddress() << ".\n";
+            }
+            continue;
+        }
+
+        // Целиком партия не помещается ни в одну ячейку — раскладываем её по частям.
+        std::cout << "WarehouseSystem::placeGoods: партия целиком не помещается, раскладываем по частям.\n";
+        while (batch->location == receivingZone_ && batch->quantity > 0) {
+            cell = warehouse_->findFreeCell(batch->getUnitVolume());
+            if (cell == nullptr) break;
+            const int fit = static_cast<int>((cell->getAvailableVolume() + 0.0001) / batch->getUnitVolume());
+            if (fit >= batch->quantity) {
+                cell->placeBatch(batch);
+                break;
+            }
+            const std::shared_ptr<GoodsBatch> part = batch->split(nextId_++, fit);
+            if (!part) break;
+            if (!cell->placeBatch(part)) {
+                receivingZone_->placeBatch(part);   // не должно случаться, но товар не теряем
+                break;
+            }
+        }
+
+        if (batch->location != receivingZone_) {
             ++placed;
-            std::cout << "WarehouseSystem::placeGoods: кладовщик подтвердил размещение в ячейке "
-                      << cell->getAddress() << ".\n";
+            std::cout << "WarehouseSystem::placeGoods: партия #" << batch->id << " размещена по частям.\n";
         } else {
-            addNotification("Нет места для партии #" + std::to_string(batch->id) + " («" + batch->productName +
-                            "»), она остаётся в зоне приёмки", "Размещение", "Кладовщик");
+            addNotification("Нет места для " + std::to_string(batch->quantity) + " шт. «" + batch->productName +
+                            "» (партия #" + std::to_string(batch->id) + "), они остаются в зоне приёмки",
+                            "Размещение", "Кладовщик");
         }
     }
     std::cout << "\nИтог: размещено партий " << placed << " из " << total << ".\n";
@@ -535,30 +635,86 @@ void WarehouseSystem::placeGoods() {
 
 void WarehouseSystem::orderMenu() {
     printScenarioTitle("4. Создание и комплектация заказа");
-    const std::vector<WarehouseOrder*> picking = getOrdersWithStatus(OrderStatus::Picking);
-    if (picking.empty()) {
+
+    // Заказы, которые ещё не отгружены: недособранные можно дособрать, любые — отменить.
+    std::vector<WarehouseOrder*> open = getOrdersWithStatus(OrderStatus::Picking);
+    for (WarehouseOrder* order : getOrdersWithStatus(OrderStatus::Completed)) open.push_back(order);
+    if (open.empty()) {
         createOrder();
         return;
     }
 
     std::cout << "  1. Создать новый заказ\n";
-    for (std::size_t index = 0; index < picking.size(); ++index) {
-        std::cout << "  " << (index + 2) << ". Дособрать заказ #" << picking[index]->getId() << ":";
-        for (const auto& item : picking[index]->getItems()) {
+    for (std::size_t index = 0; index < open.size(); ++index) {
+        std::cout << "  " << (index + 2) << ". Заказ #" << open[index]->getId() << " ("
+                  << WarehouseOrder::statusText(open[index]->getStatus()) << "):";
+        for (const auto& item : open[index]->getItems()) {
             std::cout << " «" << item->getProduct()->getName() << "» " << item->getPickedQuantity()
                       << " из " << item->getQuantity() << " шт.;";
         }
         std::cout << "\n";
     }
-    const int choice = readInt("Что делаем", 1, static_cast<int>(picking.size()) + 1, 1);
-    std::cout << "\n";
+    const int choice = readInt("Что делаем", 1, static_cast<int>(open.size()) + 1, 1);
     if (choice == 1) {
+        std::cout << "\n";
         createOrder();
+        return;
+    }
+
+    WarehouseOrder* order = open[static_cast<std::size_t>(choice - 2)];
+    bool cancel = false;
+    if (order->getStatus() == OrderStatus::Picking) {
+        cancel = readInt("1 — дособрать заказ, 2 — отменить заказ", 1, 2, 1) == 2;
+    } else {
+        cancel = readInt("Заказ уже собран. Отменить его? 1 — да, 2 — нет", 1, 2, 2) == 1;
+        if (!cancel) return;
+    }
+    std::cout << "\n";
+    if (cancel) {
+        cancelOrder(order);
         return;
     }
     printClassChain({"WarehouseSystem", "WarehouseOrder", "OrderItem", "GoodsBatch", "StorageCell"});
     printMethodsHeader();
-    pickOrder(picking[static_cast<std::size_t>(choice - 2)]);
+    pickOrder(order);
+}
+
+void WarehouseSystem::cancelOrder(WarehouseOrder* order) {
+    printClassChain({"WarehouseSystem", "WarehouseOrder", "OrderItem", "GoodsBatch", "BufferZone"});
+    printMethodsHeader();
+    const std::string orderName = "Заказ #" + std::to_string(order->getId());
+    std::cout << "WarehouseSystem::cancelOrder: отмена, " << orderName << ".\n";
+
+    // Уже отобранный товар возвращается на склад через зону приёмки.
+    int returned = 0;
+    for (const auto& item : order->getItems()) {
+        const int picked = item->getPickedQuantity();
+        if (picked == 0) continue;
+        Product* product = item->getProduct();
+
+        // Если товар уже перенесли в зону отгрузки, забираем его оттуда.
+        const std::shared_ptr<GoodsBatch>& pickedBatch = item->getPickedBatch();
+        if (pickedBatch && pickedBatch->quantity > 0) {
+            if (pickedBatch->location != nullptr) pickedBatch->location->removeBatch(pickedBatch.get());
+            pickedBatch->decreaseQuantity(pickedBatch->quantity, true);
+        }
+        auto batch = std::make_shared<GoodsBatch>(nextId_++, product->getUnitVolume() * picked,
+                                                  product->getName(), picked, product);
+        if (!receivingZone_->placeBatch(batch)) {
+            warehouse_->placeBatch(batch);
+        }
+        returned += picked;
+    }
+
+    shipments_.erase(std::remove_if(shipments_.begin(), shipments_.end(),
+        [order](const std::unique_ptr<Shipment>& shipment) { return shipment->getOrder() == order; }),
+        shipments_.end());
+    orders_.erase(std::remove_if(orders_.begin(), orders_.end(),
+        [order](const std::unique_ptr<WarehouseOrder>& item) { return item.get() == order; }), orders_.end());
+    addNotification(orderName + " отменён, возвращено на склад " + std::to_string(returned) + " шт.",
+                    "Заказ", "Оператор");
+    std::cout << "\nИтог: " << orderName << " отменён; товар (" << returned
+              << " шт.) ждёт размещения в зоне приёмки (пункт 3).\n";
 }
 
 void WarehouseSystem::createOrder() {
@@ -608,7 +764,7 @@ void WarehouseSystem::pickOrder(WarehouseOrder* order) {
             item->pick(take);
             batch->decreaseQuantity(take, true);
             if (batch->quantity == 0) {
-                batch->location->removeBatch(batch.get());   // партия закончилась — ячейка освобождается
+                warehouse_->removeBatch(batch.get());   // партия закончилась — ячейка освобождается
             }
             need -= take;
             pickedNow += take;
@@ -671,6 +827,7 @@ void WarehouseSystem::startStocktake() {
     for (const auto& line : lines) {
         StocktakeItem* item = session->addItem(std::make_unique<StocktakeItem>(
             nextId_++, line.batch->product, line.cell, line.batch->quantity));
+        line.batch->product->printInfo();
         if (line.actual < 0) {
             item->markForRecheck();
             ++skipped;
@@ -685,7 +842,7 @@ void WarehouseSystem::startStocktake() {
                   << (item->getDifference() < 0 ? "недостача списана" : "излишек оприходован") << ".\n";
         line.batch->changeQuantity(line.actual);
         if (line.actual == 0) {
-            line.cell->removeBatch(line.batch.get());
+            warehouse_->removeBatch(line.batch.get());
         }
     }
 
@@ -750,7 +907,19 @@ void WarehouseSystem::createShipment() {
         return;
     }
 
-    auto shipment = std::make_unique<Shipment>(++shipmentCounter_, order);
+    // У заказа одна отгрузка: если её уже оформляли, но не подтвердили — продолжаем её.
+    Shipment* shipment = nullptr;
+    for (const auto& existing : shipments_) {
+        if (existing->getOrder() == order) shipment = existing.get();
+    }
+    const bool newShipment = shipment == nullptr;
+    if (newShipment) {
+        shipments_.push_back(std::make_unique<Shipment>(++shipmentCounter_, order));
+        shipment = shipments_.back().get();
+    } else {
+        std::cout << "WarehouseSystem::createShipment: продолжаем ранее оформленную отгрузку.\n";
+    }
+    bool allInZone = true;
     for (const auto& orderItem : order->getItems()) {
         Product* product = orderItem->getProduct();
         const int picked = orderItem->getPickedQuantity();
@@ -763,15 +932,25 @@ void WarehouseSystem::createShipment() {
             batch->reserveQuantity(picked);
             orderItem->setPickedBatch(batch);
         }
-        if (batch->location != shippingZone_ && !shippingZone_->placeBatch(batch)) {
+        if (batch->location != shippingZone_ && batch->volume > shippingZone_->getCapacity()) {
+            // Крупный заказ больше всей зоны — его грузят в транспорт сразу.
+            std::cout << "WarehouseSystem::createShipment: «" << product->getName()
+                      << "» больше зоны отгрузки, грузится сразу в транспорт.\n";
+        } else if (batch->location != shippingZone_ && !shippingZone_->placeBatch(batch)) {
+            allInZone = false;
             addNotification("В зоне отгрузки нет места для «" + product->getName() + "»", "Отгрузка", "Оператор");
         }
-        shipment->addItem(std::make_unique<ShipmentItem>(nextId_++, product, orderItem.get(),
-                                                         orderItem->getQuantity(), picked));
+        if (newShipment) {
+            shipment->addItem(std::make_unique<ShipmentItem>(nextId_++, product, orderItem.get(),
+                                                             orderItem->getQuantity(), picked));
+        }
     }
 
     bool shipped = false;
-    if (shipment->checkReadiness()) {
+    if (!allInZone) {
+        std::cout << "WarehouseSystem::createShipment: не весь товар в зоне отгрузки — "
+                     "сначала отгрузите или подтвердите другие заказы.\n";
+    } else if (shipment->checkReadiness()) {
         const bool confirmed =
             readInt("Оператор: подтвердить отгрузку? 1 — да, 2 — нет", 1, 2, 1) == 1;
         if (confirmed) {
@@ -786,7 +965,6 @@ void WarehouseSystem::createShipment() {
         }
     }
     shipment->printInfo();
-    shipments_.push_back(std::move(shipment));
 
     std::cout << "\nИтог: " << orderName << (shipped ? " отгружен." : " не отгружен.") << "\n";
 }

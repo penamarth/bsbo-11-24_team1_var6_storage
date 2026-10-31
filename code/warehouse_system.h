@@ -21,6 +21,7 @@ public:
     void startStocktake();
     void createShipment();
     void checkDeliveryDates();
+    void cancelDelivery();
 
     void showWarehouseStructure() const;
     void showNotifications();
@@ -29,6 +30,7 @@ private:
     // Пункты меню, в которых несколько действий.
     void deliveryMenu();
     void orderMenu();
+    void cancelOrder(WarehouseOrder* order);
 
     // Вывод на экран.
     void printMenu() const;
@@ -48,6 +50,8 @@ private:
     void addNotification(std::unique_ptr<Notification> notification);
     void addNotification(const std::string& message, const std::string& type, const std::string& role);
     std::vector<std::shared_ptr<DeliveryNote>> getExpectedNotes() const;
+    std::shared_ptr<DeliveryNote> chooseExpectedNote();
+    int countFreeUnits(double unitVolume) const;
     std::vector<WarehouseOrder*> getOrdersWithStatus(OrderStatus status) const;
     int countUnreadNotifications() const;
 

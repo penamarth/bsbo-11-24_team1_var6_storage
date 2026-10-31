@@ -104,10 +104,12 @@ void DeliveryNoteItem::setActualQuantity(int quantity) {
 }
 
 void DeliveryNoteItem::setStorageCell(StorageCell* cell, double reservedVolume) {
-    storageCell_ = cell;
-    reservedVolume_ = reservedVolume;
-    std::cout << "DeliveryNoteItem::setStorageCell: для позиции назначена ячейка "
-              << (cell != nullptr ? cell->getAddress() : "—") << ".\n";
+    if (cell == nullptr) {
+        return;
+    }
+    reservations_.push_back({cell, reservedVolume});
+    std::cout << "DeliveryNoteItem::setStorageCell: для позиции «" << product_->getName()
+              << "» назначена ячейка " << cell->getAddress() << ".\n";
 }
 
 int DeliveryNoteItem::calculateDifference() const {
@@ -137,9 +139,13 @@ void DeliveryNoteItem::printInfo() const {
 Product* DeliveryNoteItem::getProduct() const { return product_; }
 int DeliveryNoteItem::getExpectedQuantity() const { return expectedQuantity_; }
 int DeliveryNoteItem::getActualQuantity() const { return actualQuantity_; }
-StorageCell* DeliveryNoteItem::getStorageCell() const { return storageCell_; }
-double DeliveryNoteItem::getReservedVolume() const { return reservedVolume_; }
-bool DeliveryNoteItem::isRejected() const { return rejected_; }
+const std::vector<CellReservation>& DeliveryNoteItem::getReservations() const { return reservations_; }
+
+double DeliveryNoteItem::getReservedVolume() const {
+    double total = 0.0;
+    for (const auto& reservation : reservations_) total += reservation.volume;
+    return total;
+}
 
 // DeliveryNote
 
@@ -188,6 +194,7 @@ void DeliveryNote::printInfo() const {
     std::cout << "DeliveryNote::printInfo: накладная #" << id_ << " " << number_ << " (" << type_
               << ") от " << date_ << ", срок " << dueDate_ << ", позиций " << items_.size()
               << ", статус " << statusText(status_) << ".\n";
+    for (const auto& item : items_) item->printInfo();
 }
 
 const char* DeliveryNote::statusText(DeliveryNoteStatus status) {
@@ -450,6 +457,7 @@ void StocktakeSession::printInfo() const {
                            : status_ == StocktakeStatus::InProgress ? "не завершена" : "создана";
     std::cout << "StocktakeSession::printInfo: сессия #" << id_ << " от " << date_
               << ", позиций " << items_.size() << ", статус — " << statusText << ".\n";
+    for (const auto& item : items_) item->printInfo();
 }
 
 // ShipmentItem
@@ -545,3 +553,4 @@ void Shipment::printInfo() const {
 }
 
 const std::vector<std::unique_ptr<ShipmentItem>>& Shipment::getItems() const { return items_; }
+WarehouseOrder* Shipment::getOrder() const { return warehouseOrder_; }

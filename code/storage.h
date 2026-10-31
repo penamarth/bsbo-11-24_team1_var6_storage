@@ -20,6 +20,8 @@ public:
     void decreaseQuantity(int quantity, bool fromReserve = false);
     void changeQuantity(int newQuantity);
     int getAvailableQuantity() const;
+    std::shared_ptr<GoodsBatch> split(int newId, int partQuantity);
+    double getUnitVolume() const;
     void updateStatus();
     void printInfo(const std::string& indent = "") const;
 
@@ -166,6 +168,7 @@ public:
     void addBufferZone(BufferZone* bufferZone);
     StorageCell* findFreeCell(double volume) const;
     bool placeBatch(const std::shared_ptr<GoodsBatch>& batch);
+    bool removeBatch(GoodsBatch* batch);
     std::vector<std::shared_ptr<GoodsBatch>> findBatches(const std::string& productName) const;
     double getAvailableVolume() const;
     void inventory() const;
