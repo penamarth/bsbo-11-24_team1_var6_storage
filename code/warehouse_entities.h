@@ -12,6 +12,11 @@ enum class OrderStatus { Created, Picking, Completed, Shipped };
 enum class StocktakeStatus { Created, InProgress, Completed };
 enum class ShipmentStatus { Created, Preparing, Ready, Shipped };
 
+// Дата в формате ДД.ММ.ГГГГ (сегодня + daysFromToday).
+std::string currentDate(int daysFromToday = 0);
+// Дата ДД.ММ.ГГГГ -> число ГГГГММДД, чтобы даты можно было сравнивать.
+int dateKey(const std::string& date);
+
 class Product {
 public:
     Product(int id, std::string name, std::string sku, double unitVolume);
@@ -29,6 +34,24 @@ private:
     double unitVolume_;
 };
 
+class Notification {
+public:
+    Notification(int id, std::string message, std::string type, std::string recipientRole);
+
+    void send() const;
+    void markAsRead();
+    void printInfo() const;
+    bool isRead() const;
+
+private:
+    int id_;
+    std::string message_;
+    std::string date_;
+    std::string type_;
+    std::string recipientRole_;
+    bool isRead_ = false;
+};
+
 class DeliveryNoteItem {
 public:
     DeliveryNoteItem(int id, Product* product, int expectedQuantity);
@@ -37,6 +60,7 @@ public:
     void setStorageCell(StorageCell* cell, double reservedVolume);
     int calculateDifference() const;
     bool isQuantityCorrect() const;
+    void reject();
     void printInfo() const;
 
     Product* getProduct() const;
@@ -44,36 +68,49 @@ public:
     int getActualQuantity() const;
     StorageCell* getStorageCell() const;
     double getReservedVolume() const;
+    bool isRejected() const;
 
 private:
     int id_;
     int expectedQuantity_;
     int actualQuantity_ = 0;
     double reservedVolume_ = 0.0;
+    bool rejected_ = false;
     Product* product_;
     StorageCell* storageCell_ = nullptr;
 };
 
+class Delivery;
+
 class DeliveryNote {
 public:
-    DeliveryNote(int id, std::string number, std::string date, std::string dueDate);
+    DeliveryNote(int id, std::string number, std::string type, std::string dueDate);
 
     DeliveryNoteItem* addItem(std::unique_ptr<DeliveryNoteItem> item);
     bool checkQuantity() const;
     void setStatus(DeliveryNoteStatus status);
+    void setDelivery(Delivery* delivery);
+    std::unique_ptr<Notification> createNotification(int id, const std::string& message,
+                                                     const std::string& role) const;
     void printInfo() const;
+
+    static const char* statusText(DeliveryNoteStatus status);
 
     const std::vector<std::unique_ptr<DeliveryNoteItem>>& getItems() const;
     const std::string& getNumber() const;
+    const std::string& getDueDate() const;
     DeliveryNoteStatus getStatus() const;
+    Delivery* getDelivery() const;
 
 private:
     int id_;
     std::string number_;
     std::string date_;
     std::string dueDate_;
+    std::string type_;
     DeliveryNoteStatus status_ = DeliveryNoteStatus::Created;
     std::vector<std::unique_ptr<DeliveryNoteItem>> items_;
+    Delivery* delivery_ = nullptr;
 };
 
 class Delivery {
@@ -90,6 +127,7 @@ public:
 
 private:
     int id_;
+    std::string arrivalDate_;
     DeliveryStatus status_ = DeliveryStatus::Expected;
     std::shared_ptr<DeliveryNote> deliveryNote_;
 };
@@ -138,6 +176,7 @@ public:
 private:
     int id_;
     OrderStatus status_ = OrderStatus::Created;
+    std::string createdAt_;
     std::vector<std::unique_ptr<OrderItem>> items_;
 };
 
@@ -148,16 +187,21 @@ public:
     void setActualQuantity(int quantity);
     int calculateDifference();
     bool isCorrect() const;
+    void markForRecheck();
+    bool isChecked() const;
+    std::unique_ptr<Notification> createNotification(int id) const;
     void printInfo() const;
 
     int getDifference() const;
     int getActualQuantity() const;
+    const std::string& getStatus() const;
 
 private:
     int id_;
     int expectedQuantity_;
     int actualQuantity_ = 0;
     int difference_ = 0;
+    std::string status_ = "не проверено";
     Product* product_;
     StorageCell* storageCell_;
 };
@@ -174,6 +218,7 @@ public:
 
 private:
     int id_;
+    std::string date_;
     StocktakeStatus status_ = StocktakeStatus::Created;
     std::vector<std::unique_ptr<StocktakeItem>> items_;
 };
@@ -185,6 +230,7 @@ public:
 
     int calculateDifference() const;
     bool isCorrect() const;
+    std::unique_ptr<Notification> createNotification(int id) const;
     void printInfo() const;
 
     OrderItem* getOrderItem() const;
@@ -202,30 +248,16 @@ public:
     Shipment(int id, WarehouseOrder* warehouseOrder);
 
     ShipmentItem* addItem(std::unique_ptr<ShipmentItem> item);
-    bool checkReadiness() const;
+    bool checkReadiness();
     bool dispatch();
     void printInfo() const;
 
+    const std::vector<std::unique_ptr<ShipmentItem>>& getItems() const;
+
 private:
     int id_;
+    std::string date_;
     ShipmentStatus status_ = ShipmentStatus::Created;
     WarehouseOrder* warehouseOrder_;
     std::vector<std::unique_ptr<ShipmentItem>> items_;
-};
-
-class Notification {
-public:
-    Notification(int id, std::string message, std::string type, std::string recipientRole);
-
-    void send() const;
-    void markAsRead();
-    void printInfo() const;
-    bool isRead() const;
-
-private:
-    int id_;
-    std::string message_;
-    std::string type_;
-    std::string recipientRole_;
-    bool isRead_ = false;
 };

@@ -9,25 +9,6 @@ namespace {
 
 const double kEpsilon = 0.0001;
 
-// Убирает партию из списка места хранения. Возвращает true, если партия была найдена.
-bool removeFromBatches(std::vector<std::shared_ptr<GoodsBatch>>& batches, GoodsBatch* batch) {
-    if (batch == nullptr) {
-        return false;
-    }
-
-    const auto it = std::find_if(
-        batches.begin(), batches.end(),
-        [batch](const std::shared_ptr<GoodsBatch>& item) { return item.get() == batch; });
-
-    if (it == batches.end()) {
-        return false;
-    }
-
-    batch->location = nullptr;
-    batches.erase(it);
-    return true;
-}
-
 void printVolume(double value) {
     std::cout << std::fixed << std::setprecision(2) << value;
 }
@@ -101,12 +82,10 @@ void GoodsBatch::updateStatus() {
         status = BatchStatus::Depleted;
     } else if (reservedQuantity > 0) {
         status = BatchStatus::Reserved;
-    } else if (location == nullptr) {
-        status = BatchStatus::Received;
-    } else if (dynamic_cast<BufferZone*>(location) != nullptr) {
-        status = BatchStatus::InBuffer;
-    } else {
+    } else if (dynamic_cast<StorageCell*>(location) != nullptr) {
         status = BatchStatus::Stored;
+    } else {
+        status = BatchStatus::Received;   // ещё не размещена в ячейке
     }
 }
 
@@ -120,11 +99,9 @@ void GoodsBatch::printInfo(const std::string& indent) const {
 const char* GoodsBatch::statusText(BatchStatus value) {
     switch (value) {
         case BatchStatus::Received: return "принята";
-        case BatchStatus::Stored: return "на хранении";
-        case BatchStatus::InBuffer: return "в буферной зоне";
+        case BatchStatus::Stored: return "размещена";
         case BatchStatus::Reserved: return "зарезервирована";
         case BatchStatus::Depleted: return "израсходована";
-        case BatchStatus::Shipped: return "отгружена";
     }
     return "неизвестно";
 }
@@ -135,25 +112,62 @@ void GoodsBatch::updateVolume() {
 
 // StorageLocation
 
+StorageLocation::StorageLocation(int id, double capacity) : id_(id), capacity_(capacity) {}
+
 bool StorageLocation::isValidVolume(double volume) {
     return volume > 0.0;
 }
 
-double StorageLocation::sumVolume(const std::vector<std::shared_ptr<GoodsBatch>>& batches) {
+bool StorageLocation::addBatch(const std::shared_ptr<GoodsBatch>& batch) {
+    // Копия указателя: ссылка batch может указывать на элемент списка старого места,
+    // который удалится при переносе.
+    const std::shared_ptr<GoodsBatch> moved = batch;
+    if (moved->location == this) {
+        return false;
+    }
+    if (moved->location != nullptr) {
+        moved->location->removeBatch(moved.get());
+    }
+    moved->location = this;
+    batches_.push_back(moved);
+    moved->updateStatus();
+    return true;
+}
+
+bool StorageLocation::eraseBatch(GoodsBatch* batch) {
+    if (batch == nullptr) {
+        return false;
+    }
+    const auto it = std::find_if(
+        batches_.begin(), batches_.end(),
+        [batch](const std::shared_ptr<GoodsBatch>& item) { return item.get() == batch; });
+    if (it == batches_.end()) {
+        return false;
+    }
+    batch->location = nullptr;
+    batches_.erase(it);
+    return true;
+}
+
+int StorageLocation::getId() const { return id_; }
+double StorageLocation::getCapacity() const { return capacity_; }
+const std::vector<std::shared_ptr<GoodsBatch>>& StorageLocation::getBatches() const { return batches_; }
+
+double StorageLocation::getCurrentVolume() const {
     double total = 0.0;
-    for (const auto& batch : batches) total += batch->volume;
+    for (const auto& batch : batches_) total += batch->volume;
     return total;
 }
 
 // StorageCell
 
 StorageCell::StorageCell(int id, std::string address, double capacity)
-    : id_(id), address_(std::move(address)), capacity_(capacity) {
+    : StorageLocation(id, capacity), address_(std::move(address)) {
     std::cout << "StorageCell::StorageCell: ячейка " << address_ << " создана.\n";
 }
 
 double StorageCell::freeVolume() const {
-    const double result = capacity_ - getUsedVolume() - reservedVolume_;
+    const double result = capacity_ - getCurrentVolume() - reservedVolume_;
     return result > 0.0 ? result : 0.0;
 }
 
@@ -188,26 +202,14 @@ bool StorageCell::placeBatch(const std::shared_ptr<GoodsBatch>& batch) {
         std::cout << "StorageCell::placeBatch: в ячейке " << address_ << " недостаточно места.\n";
         return false;
     }
-
-    // Копия указателя: ссылка batch может указывать на элемент списка старого места,
-    // который удалится при переносе.
-    const std::shared_ptr<GoodsBatch> moved = batch;
-
-    // Если партия лежала в другом месте (например, в буферной зоне), забираем её оттуда.
-    if (moved->location != nullptr) {
-        moved->location->removeBatch(moved.get());
-    }
-
-    moved->location = this;
-    batches_.push_back(moved);
-    moved->updateStatus();
-    std::cout << "StorageCell::placeBatch: партия #" << moved->id
-              << " размещена в ячейке " << address_ << ".\n";
+    const int batchId = batch->id;
+    addBatch(batch);
+    std::cout << "StorageCell::placeBatch: партия #" << batchId << " размещена в ячейке " << address_ << ".\n";
     return true;
 }
 
 bool StorageCell::removeBatch(GoodsBatch* batch) {
-    if (removeFromBatches(batches_, batch)) {
+    if (eraseBatch(batch)) {
         std::cout << "StorageCell::removeBatch: партия #" << batch->id
                   << " убрана из ячейки " << address_ << ".\n";
         return true;
@@ -218,7 +220,7 @@ bool StorageCell::removeBatch(GoodsBatch* batch) {
 
 void StorageCell::inventory() const {
     std::cout << "      StorageCell::inventory: ячейка " << address_ << " | занято ";
-    printVolume(getUsedVolume());
+    printVolume(getCurrentVolume());
     std::cout << " из ";
     printVolume(capacity_);
     std::cout << " м³ | резерв ";
@@ -251,29 +253,25 @@ void StorageCell::releaseSpace(double volume) {
     std::cout << " м³.\n";
 }
 
-const std::vector<std::shared_ptr<GoodsBatch>>& StorageCell::getBatches() const { return batches_; }
-int StorageCell::getId() const { return id_; }
 const std::string& StorageCell::getAddress() const { return address_; }
-double StorageCell::getCapacity() const { return capacity_; }
-double StorageCell::getUsedVolume() const { return sumVolume(batches_); }
 double StorageCell::getReservedVolume() const { return reservedVolume_; }
 
 // BufferZone
 
 BufferZone::BufferZone(int id, std::string name, double capacity)
-    : id_(id), name_(std::move(name)), capacity_(capacity) {
+    : StorageLocation(id, capacity), name_(std::move(name)) {
     std::cout << "BufferZone::BufferZone: зона «" << name_ << "» создана.\n";
 }
 
 bool BufferZone::hasSpace(double volume) const {
-    const bool result = isValidVolume(volume) && capacity_ - getUsedVolume() + kEpsilon >= volume;
+    const bool result = isValidVolume(volume) && capacity_ - getCurrentVolume() + kEpsilon >= volume;
     std::cout << "BufferZone::hasSpace: зона «" << name_ << "» — "
               << (result ? "места достаточно" : "места не хватает") << ".\n";
     return result;
 }
 
 double BufferZone::getAvailableVolume() const {
-    const double freeVolume = capacity_ - getUsedVolume();
+    const double freeVolume = capacity_ - getCurrentVolume();
     const double result = freeVolume > 0.0 ? freeVolume : 0.0;
     std::cout << "BufferZone::getAvailableVolume: в зоне «" << name_ << "» свободно ";
     printVolume(result);
@@ -282,28 +280,25 @@ double BufferZone::getAvailableVolume() const {
 }
 
 bool BufferZone::placeBatch(const std::shared_ptr<GoodsBatch>& batch) {
-    if (!batch || !hasSpace(batch->volume)) {
-        std::cout << "BufferZone::placeBatch: партию разместить нельзя.\n";
+    if (!batch) {
+        std::cout << "BufferZone::placeBatch: пустую партию разместить нельзя.\n";
         return false;
     }
     if (batch->location == this) {
         return true;
     }
-    const std::shared_ptr<GoodsBatch> moved = batch;
-    if (moved->location != nullptr) {
-        moved->location->removeBatch(moved.get());
+    if (!hasSpace(batch->volume)) {
+        std::cout << "BufferZone::placeBatch: партию разместить нельзя.\n";
+        return false;
     }
-
-    moved->location = this;
-    batches_.push_back(moved);
-    moved->updateStatus();
-    std::cout << "BufferZone::placeBatch: партия #" << moved->id
-              << " размещена в зоне «" << name_ << "».\n";
+    const int batchId = batch->id;
+    addBatch(batch);
+    std::cout << "BufferZone::placeBatch: партия #" << batchId << " размещена в зоне «" << name_ << "».\n";
     return true;
 }
 
 bool BufferZone::removeBatch(GoodsBatch* batch) {
-    if (removeFromBatches(batches_, batch)) {
+    if (eraseBatch(batch)) {
         std::cout << "BufferZone::removeBatch: партия #" << batch->id
                   << " убрана из зоны «" << name_ << "».\n";
         return true;
@@ -314,7 +309,7 @@ bool BufferZone::removeBatch(GoodsBatch* batch) {
 
 void BufferZone::inventory() const {
     std::cout << "  BufferZone::inventory: зона «" << name_ << "» | занято ";
-    printVolume(getUsedVolume());
+    printVolume(getCurrentVolume());
     std::cout << " из ";
     printVolume(capacity_);
     std::cout << " м³ | партий " << batches_.size() << ".\n";
@@ -325,11 +320,7 @@ std::string BufferZone::getTitle() const {
     return "зона «" + name_ + "»";
 }
 
-const std::vector<std::shared_ptr<GoodsBatch>>& BufferZone::getBatches() const { return batches_; }
-int BufferZone::getId() const { return id_; }
 const std::string& BufferZone::getName() const { return name_; }
-double BufferZone::getCapacity() const { return capacity_; }
-double BufferZone::getUsedVolume() const { return sumVolume(batches_); }
 
 // Shelf
 
@@ -354,6 +345,18 @@ bool Shelf::hasSpace(double volume) const {
     return result;
 }
 
+StorageCell* Shelf::findFreeCell(double volume) const {
+    for (const auto& cell : cells_) {
+        if (cell->hasSpace(volume)) {
+            std::cout << "Shelf::findFreeCell: на полке " << number_ << " подходит ячейка "
+                      << cell->getAddress() << ".\n";
+            return cell.get();
+        }
+    }
+    std::cout << "Shelf::findFreeCell: на полке " << number_ << " места нет.\n";
+    return nullptr;
+}
+
 double Shelf::getAvailableVolume() const {
     double total = 0.0;
     for (const auto& cell : cells_) total += cell->getAvailableVolume();
@@ -368,11 +371,10 @@ bool Shelf::placeBatch(const std::shared_ptr<GoodsBatch>& batch) {
         std::cout << "Shelf::placeBatch: пустую партию разместить нельзя.\n";
         return false;
     }
-    for (const auto& cell : cells_) {
-        if (cell->placeBatch(batch)) {
-            std::cout << "Shelf::placeBatch: партия размещена на полке " << number_ << ".\n";
-            return true;
-        }
+    StorageCell* cell = findFreeCell(batch->volume);
+    if (cell != nullptr && cell->placeBatch(batch)) {
+        std::cout << "Shelf::placeBatch: партия размещена на полке " << number_ << ".\n";
+        return true;
     }
     std::cout << "Shelf::placeBatch: на полке " << number_ << " нет места.\n";
     return false;
@@ -423,6 +425,18 @@ bool StorageCabinet::hasSpace(double volume) const {
     std::cout << "StorageCabinet::hasSpace: в шкафу " << number_ << " место "
               << (result ? "есть" : "не найдено") << ".\n";
     return result;
+}
+
+StorageCell* StorageCabinet::findFreeCell(double volume) const {
+    for (const auto& shelf : shelves_) {
+        StorageCell* cell = shelf->findFreeCell(volume);
+        if (cell != nullptr) {
+            std::cout << "StorageCabinet::findFreeCell: место найдено в шкафу " << number_ << ".\n";
+            return cell;
+        }
+    }
+    std::cout << "StorageCabinet::findFreeCell: в шкафу " << number_ << " места нет.\n";
+    return nullptr;
 }
 
 double StorageCabinet::getAvailableVolume() const {
@@ -485,30 +499,39 @@ void Warehouse::addCabinet(std::unique_ptr<StorageCabinet> cabinet) {
     cabinets_.push_back(std::move(cabinet));
 }
 
-BufferZone* Warehouse::addBufferZone(std::unique_ptr<BufferZone> bufferZone) {
-    if (!bufferZone) {
+void Warehouse::addBufferZone(BufferZone* bufferZone) {
+    if (bufferZone == nullptr) {
         std::cout << "Warehouse::addBufferZone: пустую зону добавить нельзя.\n";
-        return nullptr;
+        return;
     }
-    BufferZone* result = bufferZone.get();
+    bufferZones_.push_back(bufferZone);
     std::cout << "Warehouse::addBufferZone: буферная зона «" << bufferZone->getName() << "» добавлена на склад.\n";
-    bufferZones_.push_back(std::move(bufferZone));
-    return result;
 }
 
 StorageCell* Warehouse::findFreeCell(double volume) const {
     for (const auto& cabinet : cabinets_) {
-        for (const auto& shelf : cabinet->getShelves()) {
-            for (const auto& cell : shelf->getCells()) {
-                if (cell->hasSpace(volume)) {
-                    std::cout << "Warehouse::findFreeCell: найдена свободная ячейка " << cell->getAddress() << ".\n";
-                    return cell.get();
-                }
-            }
+        StorageCell* cell = cabinet->findFreeCell(volume);
+        if (cell != nullptr) {
+            std::cout << "Warehouse::findFreeCell: найдена свободная ячейка " << cell->getAddress() << ".\n";
+            return cell;
         }
     }
     std::cout << "Warehouse::findFreeCell: свободная ячейка не найдена.\n";
     return nullptr;
+}
+
+bool Warehouse::placeBatch(const std::shared_ptr<GoodsBatch>& batch) {
+    if (!batch) {
+        std::cout << "Warehouse::placeBatch: пустую партию разместить нельзя.\n";
+        return false;
+    }
+    StorageCell* cell = findFreeCell(batch->volume);
+    if (cell != nullptr && cell->placeBatch(batch)) {
+        std::cout << "Warehouse::placeBatch: партия размещена на складе.\n";
+        return true;
+    }
+    std::cout << "Warehouse::placeBatch: на складе нет свободного места.\n";
+    return false;
 }
 
 std::vector<std::shared_ptr<GoodsBatch>> Warehouse::findBatches(const std::string& productName) const {
@@ -522,27 +545,16 @@ std::vector<std::shared_ptr<GoodsBatch>> Warehouse::findBatches(const std::strin
     }
 
     if (result.empty()) {
-        std::cout << "Warehouse::findBatches: товар «" << productName << "» на складе не найден.\n";
+        std::cout << "Warehouse::findBatches: товар «" << productName << "» в ячейках не найден.\n";
         return result;
     }
-    std::cout << "Warehouse::findBatches: товар «" << productName << "» хранится в местах:";
+    std::cout << "Warehouse::findBatches: товар «" << productName << "» хранится:";
     for (const auto& batch : result) {
         std::cout << " " << batch->location->getTitle() << " (партия #" << batch->id << ", "
                   << batch->quantity << " шт.)";
     }
     std::cout << ".\n";
     return result;
-}
-
-bool Warehouse::placeBatch(const std::shared_ptr<GoodsBatch>& batch) {
-    for (const auto& cabinet : cabinets_) {
-        if (cabinet->placeBatch(batch)) {
-            std::cout << "Warehouse::placeBatch: партия размещена на складе.\n";
-            return true;
-        }
-    }
-    std::cout << "Warehouse::placeBatch: на складе нет свободного места.\n";
-    return false;
 }
 
 double Warehouse::getAvailableVolume() const {
@@ -557,7 +569,7 @@ double Warehouse::getAvailableVolume() const {
 void Warehouse::inventory() const {
     std::cout << "Warehouse::inventory: склад «" << name_ << "», адрес: " << address_ << ".\n";
     for (const auto& cabinet : cabinets_) cabinet->inventory();
-    for (const auto& zone : bufferZones_) zone->inventory();
+    for (BufferZone* zone : bufferZones_) zone->inventory();
 }
 
 std::vector<StorageCell*> Warehouse::getAllCells() const {
@@ -574,4 +586,4 @@ int Warehouse::getId() const { return id_; }
 const std::string& Warehouse::getName() const { return name_; }
 const std::string& Warehouse::getAddress() const { return address_; }
 const std::vector<std::unique_ptr<StorageCabinet>>& Warehouse::getCabinets() const { return cabinets_; }
-const std::vector<std::unique_ptr<BufferZone>>& Warehouse::getBufferZones() const { return bufferZones_; }
+const std::vector<BufferZone*>& Warehouse::getBufferZones() const { return bufferZones_; }

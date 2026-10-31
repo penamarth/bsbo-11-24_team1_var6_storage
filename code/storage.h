@@ -5,10 +5,11 @@
 #include <vector>
 
 class StorageLocation;
+class StorageCell;
 class Product;
 
 // Статус партии товара.
-enum class BatchStatus { Received, Stored, InBuffer, Reserved, Depleted, Shipped };
+enum class BatchStatus { Received, Stored, Reserved, Depleted };
 
 class GoodsBatch {
 public:
@@ -39,9 +40,10 @@ private:
     double unitVolume_ = 0.0;
 };
 
-// Абстрактный общий класс только для непосредственных мест хранения.
+// Абстрактный базовый класс мест хранения. От него наследуются только ячейка и буферная зона.
 class StorageLocation {
 public:
+    StorageLocation(int id, double capacity);
     virtual ~StorageLocation() = default;
 
     virtual bool hasSpace(double volume) const = 0;
@@ -51,12 +53,22 @@ public:
     virtual void inventory() const = 0;
     virtual std::string getTitle() const = 0;
 
+    // Геттеры ничего не печатают — они нужны для строки состояния меню.
+    int getId() const;
+    double getCapacity() const;
+    double getCurrentVolume() const;   // занятый объём = сумма объёмов партий
+    const std::vector<std::shared_ptr<GoodsBatch>>& getBatches() const;
+
 protected:
     static bool isValidVolume(double volume);
-    static double sumVolume(const std::vector<std::shared_ptr<GoodsBatch>>& batches);
+    bool addBatch(const std::shared_ptr<GoodsBatch>& batch);
+    bool eraseBatch(GoodsBatch* batch);
+
+    int id_;
+    double capacity_;
+    std::vector<std::shared_ptr<GoodsBatch>> batches_;
 };
 
-// Ячейка и буферная зона — единственные классы-наследники StorageLocation.
 class StorageCell final : public StorageLocation {
 public:
     StorageCell(int id, std::string address, double capacity);
@@ -71,22 +83,14 @@ public:
     bool reserveSpace(double volume);
     void releaseSpace(double volume);
 
-    // Геттеры ничего не печатают — они нужны для строки состояния меню.
-    const std::vector<std::shared_ptr<GoodsBatch>>& getBatches() const;
-    int getId() const;
     const std::string& getAddress() const;
-    double getCapacity() const;
-    double getUsedVolume() const;
     double getReservedVolume() const;
 
 private:
     double freeVolume() const;
 
-    int id_;
     std::string address_;
-    double capacity_;
     double reservedVolume_ = 0.0;
-    std::vector<std::shared_ptr<GoodsBatch>> batches_;
 };
 
 class BufferZone final : public StorageLocation {
@@ -100,17 +104,10 @@ public:
     void inventory() const override;
     std::string getTitle() const override;
 
-    const std::vector<std::shared_ptr<GoodsBatch>>& getBatches() const;
-    int getId() const;
     const std::string& getName() const;
-    double getCapacity() const;
-    double getUsedVolume() const;
 
 private:
-    int id_;
     std::string name_;
-    double capacity_;
-    std::vector<std::shared_ptr<GoodsBatch>> batches_;
 };
 
 // Shelf НЕ наследуется от StorageLocation. Это составная часть шкафа.
@@ -120,6 +117,7 @@ public:
 
     void addCell(std::unique_ptr<StorageCell> cell);
     bool hasSpace(double volume) const;
+    StorageCell* findFreeCell(double volume) const;
     double getAvailableVolume() const;
     bool placeBatch(const std::shared_ptr<GoodsBatch>& batch);
     bool removeBatch(GoodsBatch* batch);
@@ -142,6 +140,7 @@ public:
 
     void addShelf(std::unique_ptr<Shelf> shelf);
     bool hasSpace(double volume) const;
+    StorageCell* findFreeCell(double volume) const;
     double getAvailableVolume() const;
     bool placeBatch(const std::shared_ptr<GoodsBatch>& batch);
     bool removeBatch(GoodsBatch* batch);
@@ -157,15 +156,16 @@ private:
     std::vector<std::unique_ptr<Shelf>> shelves_;
 };
 
-// Warehouse — верхний объект композиции: содержит шкафы и буферные зоны.
+// Warehouse: шкафы входят в склад (композиция),
+// буферные зоны склад только использует (агрегация) — ими владеет WarehouseSystem.
 class Warehouse final {
 public:
     Warehouse(int id, std::string name, std::string address);
 
     void addCabinet(std::unique_ptr<StorageCabinet> cabinet);
-    BufferZone* addBufferZone(std::unique_ptr<BufferZone> bufferZone);
-    bool placeBatch(const std::shared_ptr<GoodsBatch>& batch);
+    void addBufferZone(BufferZone* bufferZone);
     StorageCell* findFreeCell(double volume) const;
+    bool placeBatch(const std::shared_ptr<GoodsBatch>& batch);
     std::vector<std::shared_ptr<GoodsBatch>> findBatches(const std::string& productName) const;
     double getAvailableVolume() const;
     void inventory() const;
@@ -176,12 +176,12 @@ public:
     const std::string& getName() const;
     const std::string& getAddress() const;
     const std::vector<std::unique_ptr<StorageCabinet>>& getCabinets() const;
-    const std::vector<std::unique_ptr<BufferZone>>& getBufferZones() const;
+    const std::vector<BufferZone*>& getBufferZones() const;
 
 private:
     int id_;
     std::string name_;
     std::string address_;
     std::vector<std::unique_ptr<StorageCabinet>> cabinets_;
-    std::vector<std::unique_ptr<BufferZone>> bufferZones_;
+    std::vector<BufferZone*> bufferZones_;
 };

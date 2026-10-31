@@ -11,20 +11,31 @@ public:
     WarehouseSystem();
 
     void runMenu();
+
+    // Методы из диаграммы классов.
+    void registerDelivery();
+    void receiveDelivery();
+    void placeGoods();
+    void createOrder();
+    void pickOrder(WarehouseOrder* order);
+    void startStocktake();
+    void createShipment();
+    void checkDeliveryDates();
+
     void showWarehouseStructure() const;
-    void runReceivingScenario();
-    void runPlacementScenario();
-    void runOrderScenario();
-    void runStocktakeScenario();
-    void runShipmentScenario();
     void showNotifications();
 
 private:
+    // Пункты меню, в которых несколько действий.
+    void deliveryMenu();
+    void orderMenu();
+
     // Вывод на экран.
     void printMenu() const;
     void printStatusBar() const;
     void printScenarioTitle(const std::string& title) const;
     void printClassChain(const std::vector<std::string>& chain) const;
+    void printMethodsHeader() const;
     void printProducts() const;
 
     // Ввод с клавиатуры: Enter без числа подставляет значение по умолчанию.
@@ -34,15 +45,19 @@ private:
     Product* chooseProduct(int defaultNumber);
     void waitForEnter();
 
+    void addNotification(std::unique_ptr<Notification> notification);
     void addNotification(const std::string& message, const std::string& type, const std::string& role);
-    int countReadyOrders() const;
+    std::vector<std::shared_ptr<DeliveryNote>> getExpectedNotes() const;
+    std::vector<WarehouseOrder*> getOrdersWithStatus(OrderStatus status) const;
     int countUnreadNotifications() const;
 
     std::unique_ptr<Warehouse> warehouse_;
+    std::vector<std::unique_ptr<BufferZone>> bufferZones_;
     BufferZone* receivingZone_ = nullptr;
     BufferZone* shippingZone_ = nullptr;
 
     std::vector<std::unique_ptr<Product>> products_;
+    std::vector<std::shared_ptr<DeliveryNote>> deliveryNotes_;
     std::vector<std::shared_ptr<Delivery>> deliveries_;
     std::vector<std::unique_ptr<WarehouseOrder>> orders_;
     std::vector<std::unique_ptr<StocktakeSession>> stocktakes_;

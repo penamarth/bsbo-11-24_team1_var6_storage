@@ -1,21 +1,11 @@
 #include "warehouse_entities.h"
 
 #include <algorithm>
+#include <ctime>
 #include <iostream>
 #include <utility>
 
 namespace {
-
-const char* deliveryNoteStatusText(DeliveryNoteStatus status) {
-    switch (status) {
-        case DeliveryNoteStatus::Created: return "создана";
-        case DeliveryNoteStatus::Expected: return "ожидается";
-        case DeliveryNoteStatus::Received: return "принята";
-        case DeliveryNoteStatus::Completed: return "завершена";
-        case DeliveryNoteStatus::Discrepancy: return "расхождение";
-    }
-    return "неизвестно";
-}
 
 const char* deliveryStatusText(DeliveryStatus status) {
     switch (status) {
@@ -39,6 +29,27 @@ const char* shipmentStatusText(ShipmentStatus status) {
 
 } // namespace
 
+// Даты
+
+std::string currentDate(int daysFromToday) {
+    const std::time_t now = std::time(nullptr) + static_cast<std::time_t>(daysFromToday) * 24 * 60 * 60;
+    const std::tm* local = std::localtime(&now);
+    char buffer[16] = {};
+    std::strftime(buffer, sizeof(buffer), "%d.%m.%Y", local);
+    return buffer;
+}
+
+int dateKey(const std::string& date) {
+    // ДД.ММ.ГГГГ
+    if (date.size() != 10) {
+        return 0;
+    }
+    const int day = std::stoi(date.substr(0, 2));
+    const int month = std::stoi(date.substr(3, 2));
+    const int year = std::stoi(date.substr(6, 4));
+    return year * 10000 + month * 100 + day;
+}
+
 // Product
 
 Product::Product(int id, std::string name, std::string sku, double unitVolume)
@@ -56,12 +67,35 @@ const std::string& Product::getName() const { return name_; }
 const std::string& Product::getSku() const { return sku_; }
 double Product::getUnitVolume() const { return unitVolume_; }
 
+// Notification
+
+Notification::Notification(int id, std::string message, std::string type, std::string recipientRole)
+    : id_(id), message_(std::move(message)), date_(currentDate()), type_(std::move(type)),
+      recipientRole_(std::move(recipientRole)) {
+    std::cout << "Notification::Notification: уведомление создано.\n";
+}
+
+void Notification::send() const {
+    std::cout << "Notification::send: «" << message_ << "» отправлено роли «" << recipientRole_ << "».\n";
+}
+
+void Notification::markAsRead() {
+    isRead_ = true;
+}
+
+void Notification::printInfo() const {
+    std::cout << "Notification::printInfo: #" << id_ << (isRead_ ? "   " : " * ") << date_
+              << " [" << type_ << "] " << message_ << " (получатель: " << recipientRole_ << ")\n";
+}
+
+bool Notification::isRead() const { return isRead_; }
+
 // DeliveryNoteItem
 
 DeliveryNoteItem::DeliveryNoteItem(int id, Product* product, int expectedQuantity)
     : id_(id), expectedQuantity_(expectedQuantity), product_(product) {
-    std::cout << "DeliveryNoteItem::DeliveryNoteItem: позиция накладной создана, ожидается "
-              << expectedQuantity_ << " шт.\n";
+    std::cout << "DeliveryNoteItem::DeliveryNoteItem: позиция «" << product_->getName()
+              << "» создана, ожидается " << expectedQuantity_ << " шт.\n";
 }
 
 void DeliveryNoteItem::setActualQuantity(int quantity) {
@@ -83,15 +117,21 @@ int DeliveryNoteItem::calculateDifference() const {
 }
 
 bool DeliveryNoteItem::isQuantityCorrect() const {
-    const bool result = actualQuantity_ == expectedQuantity_;
-    std::cout << "DeliveryNoteItem::isQuantityCorrect: количество "
-              << (result ? "совпадает" : "не совпадает") << ".\n";
+    const bool result = !rejected_ && actualQuantity_ == expectedQuantity_;
+    std::cout << "DeliveryNoteItem::isQuantityCorrect: позиция «" << product_->getName() << "» — "
+              << (rejected_ ? "отклонена" : (result ? "количество совпадает" : "количество не совпадает"))
+              << ".\n";
     return result;
 }
 
+void DeliveryNoteItem::reject() {
+    rejected_ = true;
+    std::cout << "DeliveryNoteItem::reject: позиция «" << product_->getName() << "» отклонена.\n";
+}
+
 void DeliveryNoteItem::printInfo() const {
-    std::cout << "DeliveryNoteItem::printInfo: позиция #" << id_ << ", ожидается " << expectedQuantity_
-              << ", фактически " << actualQuantity_ << " шт.\n";
+    std::cout << "DeliveryNoteItem::printInfo: позиция #" << id_ << " «" << product_->getName()
+              << "», ожидается " << expectedQuantity_ << ", фактически " << actualQuantity_ << " шт.\n";
 }
 
 Product* DeliveryNoteItem::getProduct() const { return product_; }
@@ -99,12 +139,15 @@ int DeliveryNoteItem::getExpectedQuantity() const { return expectedQuantity_; }
 int DeliveryNoteItem::getActualQuantity() const { return actualQuantity_; }
 StorageCell* DeliveryNoteItem::getStorageCell() const { return storageCell_; }
 double DeliveryNoteItem::getReservedVolume() const { return reservedVolume_; }
+bool DeliveryNoteItem::isRejected() const { return rejected_; }
 
 // DeliveryNote
 
-DeliveryNote::DeliveryNote(int id, std::string number, std::string date, std::string dueDate)
-    : id_(id), number_(std::move(number)), date_(std::move(date)), dueDate_(std::move(dueDate)) {
-    std::cout << "DeliveryNote::DeliveryNote: накладная " << number_ << " создана.\n";
+DeliveryNote::DeliveryNote(int id, std::string number, std::string type, std::string dueDate)
+    : id_(id), number_(std::move(number)), date_(currentDate()), dueDate_(std::move(dueDate)),
+      type_(std::move(type)) {
+    std::cout << "DeliveryNote::DeliveryNote: накладная " << number_ << " (" << type_
+              << ") создана, срок поставки " << dueDate_ << ".\n";
 }
 
 DeliveryNoteItem* DeliveryNote::addItem(std::unique_ptr<DeliveryNoteItem> item) {
@@ -115,9 +158,10 @@ DeliveryNoteItem* DeliveryNote::addItem(std::unique_ptr<DeliveryNoteItem> item) 
 }
 
 bool DeliveryNote::checkQuantity() const {
-    const bool result = !items_.empty() && std::all_of(
-        items_.begin(), items_.end(),
-        [](const std::unique_ptr<DeliveryNoteItem>& item) { return item->isQuantityCorrect(); });
+    bool result = !items_.empty();
+    for (const auto& item : items_) {
+        if (!item->isQuantityCorrect()) result = false;
+    }
     std::cout << "DeliveryNote::checkQuantity: по накладной " << number_ << " количество "
               << (result ? "сходится" : "НЕ сходится") << ".\n";
     return result;
@@ -126,29 +170,56 @@ bool DeliveryNote::checkQuantity() const {
 void DeliveryNote::setStatus(DeliveryNoteStatus status) {
     status_ = status;
     std::cout << "DeliveryNote::setStatus: статус накладной " << number_ << " — "
-              << deliveryNoteStatusText(status_) << ".\n";
+              << statusText(status_) << ".\n";
+}
+
+void DeliveryNote::setDelivery(Delivery* delivery) {
+    delivery_ = delivery;
+    std::cout << "DeliveryNote::setDelivery: к накладной " << number_ << " привязана поставка.\n";
+}
+
+std::unique_ptr<Notification> DeliveryNote::createNotification(int id, const std::string& message,
+                                                               const std::string& role) const {
+    std::cout << "DeliveryNote::createNotification: уведомление по накладной " << number_ << ".\n";
+    return std::make_unique<Notification>(id, "Поставка " + number_ + ": " + message, "Приёмка", role);
 }
 
 void DeliveryNote::printInfo() const {
-    std::cout << "DeliveryNote::printInfo: накладная #" << id_ << " " << number_ << " от " << date_
-              << " (срок " << dueDate_ << "), позиций " << items_.size()
-              << ", статус " << deliveryNoteStatusText(status_) << ".\n";
+    std::cout << "DeliveryNote::printInfo: накладная #" << id_ << " " << number_ << " (" << type_
+              << ") от " << date_ << ", срок " << dueDate_ << ", позиций " << items_.size()
+              << ", статус " << statusText(status_) << ".\n";
+}
+
+const char* DeliveryNote::statusText(DeliveryNoteStatus status) {
+    switch (status) {
+        case DeliveryNoteStatus::Created: return "создана";
+        case DeliveryNoteStatus::Expected: return "ожидается";
+        case DeliveryNoteStatus::Received: return "товар получен";
+        case DeliveryNoteStatus::Completed: return "завершена";
+        case DeliveryNoteStatus::Discrepancy: return "расхождение";
+    }
+    return "неизвестно";
 }
 
 const std::vector<std::unique_ptr<DeliveryNoteItem>>& DeliveryNote::getItems() const { return items_; }
 const std::string& DeliveryNote::getNumber() const { return number_; }
+const std::string& DeliveryNote::getDueDate() const { return dueDate_; }
 DeliveryNoteStatus DeliveryNote::getStatus() const { return status_; }
+Delivery* DeliveryNote::getDelivery() const { return delivery_; }
 
 // Delivery
 
 Delivery::Delivery(int id, std::shared_ptr<DeliveryNote> deliveryNote)
     : id_(id), deliveryNote_(std::move(deliveryNote)) {
-    std::cout << "Delivery::Delivery: поставка #" << id_ << " создана.\n";
+    std::cout << "Delivery::Delivery: поставка #" << id_ << " по накладной "
+              << deliveryNote_->getNumber() << " создана.\n";
+    deliveryNote_->setDelivery(this);
 }
 
 void Delivery::arrive() {
     status_ = DeliveryStatus::Arrived;
-    std::cout << "Delivery::arrive: поставка прибыла на склад.\n";
+    arrivalDate_ = currentDate();
+    std::cout << "Delivery::arrive: поставка прибыла на склад " << arrivalDate_ << ".\n";
 }
 
 void Delivery::accept() {
@@ -162,8 +233,8 @@ void Delivery::acceptWithDiscrepancy() {
 }
 
 void Delivery::printInfo() const {
-    std::cout << "Delivery::printInfo: поставка #" << id_ << ", статус "
-              << deliveryStatusText(status_) << ".\n";
+    std::cout << "Delivery::printInfo: поставка #" << id_ << ", прибыла " << arrivalDate_
+              << ", статус " << deliveryStatusText(status_) << ".\n";
 }
 
 const std::shared_ptr<DeliveryNote>& Delivery::getDeliveryNote() const { return deliveryNote_; }
@@ -173,7 +244,8 @@ DeliveryStatus Delivery::getStatus() const { return status_; }
 
 OrderItem::OrderItem(int id, Product* product, int quantity)
     : id_(id), quantity_(quantity), product_(product) {
-    std::cout << "OrderItem::OrderItem: позиция заказа создана, нужно " << quantity_ << " шт.\n";
+    std::cout << "OrderItem::OrderItem: позиция «" << product_->getName() << "» создана, нужно "
+              << quantity_ << " шт.\n";
 }
 
 void OrderItem::pick(int quantity) {
@@ -184,7 +256,8 @@ void OrderItem::pick(int quantity) {
 
 bool OrderItem::isComplete() const {
     const bool result = pickedQuantity_ >= quantity_;
-    std::cout << "OrderItem::isComplete: позиция " << (result ? "собрана" : "собрана не полностью") << ".\n";
+    std::cout << "OrderItem::isComplete: позиция «" << product_->getName() << "» "
+              << (result ? "собрана" : "собрана не полностью") << ".\n";
     return result;
 }
 
@@ -199,8 +272,7 @@ void OrderItem::setPickedBatch(const std::shared_ptr<GoodsBatch>& batch) {
 }
 
 void OrderItem::printInfo() const {
-    const std::string productName = product_ == nullptr ? "не указан" : product_->getName();
-    std::cout << "OrderItem::printInfo: позиция #" << id_ << " «" << productName << "», отобрано "
+    std::cout << "OrderItem::printInfo: позиция #" << id_ << " «" << product_->getName() << "», отобрано "
               << pickedQuantity_ << " из " << quantity_ << " шт.\n";
 }
 
@@ -211,8 +283,8 @@ const std::shared_ptr<GoodsBatch>& OrderItem::getPickedBatch() const { return pi
 
 // WarehouseOrder
 
-WarehouseOrder::WarehouseOrder(int id) : id_(id) {
-    std::cout << "WarehouseOrder::WarehouseOrder: заказ #" << id_ << " создан.\n";
+WarehouseOrder::WarehouseOrder(int id) : id_(id), createdAt_(currentDate()) {
+    std::cout << "WarehouseOrder::WarehouseOrder: заказ #" << id_ << " создан " << createdAt_ << ".\n";
 }
 
 OrderItem* WarehouseOrder::addItem(std::unique_ptr<OrderItem> item) {
@@ -228,17 +300,23 @@ void WarehouseOrder::startPicking() {
 }
 
 bool WarehouseOrder::checkCompleteness() const {
-    const bool result = !items_.empty() && std::all_of(
-        items_.begin(), items_.end(),
-        [](const std::unique_ptr<OrderItem>& item) { return item->isComplete(); });
+    bool result = !items_.empty();
+    for (const auto& item : items_) {
+        if (!item->isComplete()) result = false;
+    }
     std::cout << "WarehouseOrder::checkCompleteness: заказ #" << id_
               << (result ? " укомплектован" : " укомплектован не полностью") << ".\n";
     return result;
 }
 
 void WarehouseOrder::complete() {
-    status_ = checkCompleteness() ? OrderStatus::Completed : OrderStatus::Picking;
-    std::cout << "WarehouseOrder::complete: статус заказа #" << id_ << " — " << statusText(status_) << ".\n";
+    if (status_ == OrderStatus::Shipped) {
+        std::cout << "WarehouseOrder::complete: заказ #" << id_ << " уже отгружен.\n";
+        return;
+    }
+    status_ = OrderStatus::Completed;
+    std::cout << "WarehouseOrder::complete: заказ #" << id_ << " получил статус «"
+              << statusText(status_) << "».\n";
 }
 
 void WarehouseOrder::ship() {
@@ -248,11 +326,11 @@ void WarehouseOrder::ship() {
         return;
     }
     status_ = OrderStatus::Shipped;
-    std::cout << "WarehouseOrder::ship: заказ #" << id_ << " отгружен.\n";
+    std::cout << "WarehouseOrder::ship: заказ #" << id_ << " получил статус «" << statusText(status_) << "».\n";
 }
 
 void WarehouseOrder::printInfo() const {
-    std::cout << "WarehouseOrder::printInfo: заказ #" << id_ << ", статус "
+    std::cout << "WarehouseOrder::printInfo: заказ #" << id_ << " от " << createdAt_ << ", статус "
               << statusText(status_) << ".\n";
     for (const auto& item : items_) item->printInfo();
 }
@@ -275,8 +353,8 @@ OrderStatus WarehouseOrder::getStatus() const { return status_; }
 
 StocktakeItem::StocktakeItem(int id, Product* product, StorageCell* cell, int expectedQuantity)
     : id_(id), expectedQuantity_(expectedQuantity), product_(product), storageCell_(cell) {
-    std::cout << "StocktakeItem::StocktakeItem: позиция инвентаризации создана, по учёту "
-              << expectedQuantity_ << " шт.\n";
+    std::cout << "StocktakeItem::StocktakeItem: позиция создана, ячейка " << storageCell_->getAddress()
+              << ", товар «" << product_->getName() << "», по учёту " << expectedQuantity_ << " шт.\n";
 }
 
 void StocktakeItem::setActualQuantity(int quantity) {
@@ -286,31 +364,56 @@ void StocktakeItem::setActualQuantity(int quantity) {
 
 int StocktakeItem::calculateDifference() {
     difference_ = actualQuantity_ - expectedQuantity_;
-    std::cout << "StocktakeItem::calculateDifference: расхождение — " << difference_ << " шт.\n";
+    if (difference_ == 0) {
+        status_ = "проверено";
+    } else {
+        status_ = difference_ < 0 ? "недостача" : "излишек";
+    }
+    std::cout << "StocktakeItem::calculateDifference: расхождение — " << difference_
+              << " шт., статус позиции — " << status_ << ".\n";
     return difference_;
 }
 
 bool StocktakeItem::isCorrect() const {
-    const bool result = difference_ == 0;
+    const bool result = isChecked() && difference_ == 0;
     std::cout << "StocktakeItem::isCorrect: остаток " << (result ? "корректен" : "НЕ совпадает") << ".\n";
     return result;
 }
 
+void StocktakeItem::markForRecheck() {
+    status_ = "повторная проверка";
+    std::cout << "StocktakeItem::markForRecheck: ячейка " << storageCell_->getAddress()
+              << " отмечена для повторной проверки.\n";
+}
+
+bool StocktakeItem::isChecked() const {
+    return status_ != "не проверено" && status_ != "повторная проверка";
+}
+
+std::unique_ptr<Notification> StocktakeItem::createNotification(int id) const {
+    std::cout << "StocktakeItem::createNotification: уведомление о расхождении.\n";
+    const int amount = difference_ < 0 ? -difference_ : difference_;
+    return std::make_unique<Notification>(
+        id, "Ячейка " + storageCell_->getAddress() + ", «" + product_->getName() + "»: " + status_ +
+            " " + std::to_string(amount) + " шт.",
+        "Инвентаризация", "Оператор");
+}
+
 void StocktakeItem::printInfo() const {
-    const std::string productName = product_ == nullptr ? "не указан" : product_->getName();
-    const std::string cellAddress = storageCell_ == nullptr ? "не назначена" : storageCell_->getAddress();
-    std::cout << "StocktakeItem::printInfo: позиция #" << id_ << ", товар «" << productName
-              << "», ячейка " << cellAddress << ", по учёту " << expectedQuantity_
-              << ", фактически " << actualQuantity_ << " шт.\n";
+    std::cout << "StocktakeItem::printInfo: позиция #" << id_ << ", ячейка " << storageCell_->getAddress()
+              << ", товар «" << product_->getName() << "», по учёту " << expectedQuantity_
+              << ", фактически " << actualQuantity_ << " шт., статус — " << status_ << ".\n";
 }
 
 int StocktakeItem::getDifference() const { return difference_; }
 int StocktakeItem::getActualQuantity() const { return actualQuantity_; }
+const std::string& StocktakeItem::getStatus() const { return status_; }
 
 // StocktakeSession
 
-StocktakeSession::StocktakeSession(int id) : id_(id) {
-    std::cout << "StocktakeSession::StocktakeSession: сессия инвентаризации #" << id_ << " создана.\n";
+StocktakeSession::StocktakeSession(int id) : id_(id), date_(currentDate()) {
+    std::cout << "StocktakeSession::StocktakeSession: сессия инвентаризации #" << id_
+              << " от " << date_ << " создана.\n";
 }
 
 void StocktakeSession::start() {
@@ -331,17 +434,22 @@ StocktakeItem* StocktakeSession::addItem(std::unique_ptr<StocktakeItem> item) {
 }
 
 bool StocktakeSession::isComplete() const {
-    const bool result = std::all_of(
-        items_.begin(), items_.end(),
-        [](const std::unique_ptr<StocktakeItem>& item) { return item->isCorrect(); });
-    std::cout << "StocktakeSession::isComplete: "
-              << (result ? "все остатки совпали с учётом" : "есть расхождения с учётом") << ".\n";
-    return result;
+    const auto unchecked = std::count_if(items_.begin(), items_.end(),
+        [](const std::unique_ptr<StocktakeItem>& item) { return !item->isChecked(); });
+    std::cout << "StocktakeSession::isComplete: ";
+    if (unchecked == 0) {
+        std::cout << "все ячейки проверены.\n";
+    } else {
+        std::cout << "не проверено позиций — " << unchecked << ".\n";
+    }
+    return unchecked == 0;
 }
 
 void StocktakeSession::printInfo() const {
-    std::cout << "StocktakeSession::printInfo: сессия #" << id_
-              << ", проверено позиций — " << items_.size() << ".\n";
+    const char* statusText = status_ == StocktakeStatus::Completed ? "завершена"
+                           : status_ == StocktakeStatus::InProgress ? "не завершена" : "создана";
+    std::cout << "StocktakeSession::printInfo: сессия #" << id_ << " от " << date_
+              << ", позиций " << items_.size() << ", статус — " << statusText << ".\n";
 }
 
 // ShipmentItem
@@ -350,7 +458,8 @@ ShipmentItem::ShipmentItem(int id, Product* product, OrderItem* orderItem,
                            int expectedQuantity, int actualQuantity)
     : id_(id), expectedQuantity_(expectedQuantity), actualQuantity_(actualQuantity),
       product_(product), orderItem_(orderItem) {
-    std::cout << "ShipmentItem::ShipmentItem: позиция отгрузки создана.\n";
+    std::cout << "ShipmentItem::ShipmentItem: позиция «" << product_->getName() << "» создана, по заказу "
+              << expectedQuantity_ << ", подготовлено " << actualQuantity_ << " шт.\n";
 }
 
 int ShipmentItem::calculateDifference() const {
@@ -365,10 +474,17 @@ bool ShipmentItem::isCorrect() const {
     return result;
 }
 
+std::unique_ptr<Notification> ShipmentItem::createNotification(int id) const {
+    std::cout << "ShipmentItem::createNotification: уведомление о расхождении при отгрузке.\n";
+    return std::make_unique<Notification>(
+        id, "Расхождение при отгрузке «" + product_->getName() + "»: по заказу " +
+            std::to_string(expectedQuantity_) + ", подготовлено " + std::to_string(actualQuantity_) + " шт.",
+        "Отгрузка", "Оператор");
+}
+
 void ShipmentItem::printInfo() const {
-    const std::string productName = product_ == nullptr ? "не указан" : product_->getName();
-    std::cout << "ShipmentItem::printInfo: позиция #" << id_ << ", товар «" << productName
-              << "», по заказу " << expectedQuantity_ << ", собрано " << actualQuantity_ << " шт.\n";
+    std::cout << "ShipmentItem::printInfo: позиция #" << id_ << ", товар «" << product_->getName()
+              << "», по заказу " << expectedQuantity_ << ", подготовлено " << actualQuantity_ << " шт.\n";
 }
 
 OrderItem* ShipmentItem::getOrderItem() const { return orderItem_; }
@@ -376,8 +492,9 @@ OrderItem* ShipmentItem::getOrderItem() const { return orderItem_; }
 // Shipment
 
 Shipment::Shipment(int id, WarehouseOrder* warehouseOrder)
-    : id_(id), warehouseOrder_(warehouseOrder) {
-    std::cout << "Shipment::Shipment: отгрузка #" << id_ << " создана.\n";
+    : id_(id), date_(currentDate()), warehouseOrder_(warehouseOrder) {
+    std::cout << "Shipment::Shipment: отгрузка #" << id_ << " по заказу #" << warehouseOrder_->getId()
+              << " создана.\n";
 }
 
 ShipmentItem* Shipment::addItem(std::unique_ptr<ShipmentItem> item) {
@@ -387,70 +504,44 @@ ShipmentItem* Shipment::addItem(std::unique_ptr<ShipmentItem> item) {
     return result;
 }
 
-bool Shipment::checkReadiness() const {
-    if (warehouseOrder_ == nullptr || warehouseOrder_->getStatus() == OrderStatus::Shipped) {
-        std::cout << "Shipment::checkReadiness: заказ не найден или уже отгружен.\n";
-        return false;
+bool Shipment::checkReadiness() {
+    bool result = !items_.empty() && warehouseOrder_->getStatus() == OrderStatus::Completed;
+    for (const auto& item : items_) {
+        if (!item->isCorrect()) result = false;
     }
-    const bool result = !items_.empty() && std::all_of(
-        items_.begin(), items_.end(),
-        [](const std::unique_ptr<ShipmentItem>& item) { return item->isCorrect(); });
+    status_ = result ? ShipmentStatus::Ready : ShipmentStatus::Preparing;
     std::cout << "Shipment::checkReadiness: отгрузка " << (result ? "готова" : "НЕ готова") << ".\n";
     return result;
 }
 
 bool Shipment::dispatch() {
-    if (!checkReadiness()) {
-        status_ = ShipmentStatus::Preparing;
-        std::cout << "Shipment::dispatch: отгрузка #" << id_ << " не выполнена.\n";
+    if (status_ != ShipmentStatus::Ready) {
+        std::cout << "Shipment::dispatch: отгрузка #" << id_ << " не готова, отгрузить нельзя.\n";
         return false;
     }
-    status_ = ShipmentStatus::Ready;
 
     // Собранный товар покидает зону отгрузки.
     for (const auto& item : items_) {
-        OrderItem* orderItem = item->getOrderItem();
-        if (orderItem == nullptr || !orderItem->getPickedBatch()) {
+        const std::shared_ptr<GoodsBatch> batch = item->getOrderItem()->getPickedBatch();
+        if (!batch) {
             continue;
         }
-        const std::shared_ptr<GoodsBatch> batch = orderItem->getPickedBatch();
         if (batch->location != nullptr) {
             batch->location->removeBatch(batch.get());
         }
-        batch->status = BatchStatus::Shipped;
+        batch->decreaseQuantity(batch->quantity, true);
     }
 
     warehouseOrder_->ship();
     status_ = ShipmentStatus::Shipped;
-    std::cout << "Shipment::dispatch: отгрузка #" << id_ << " выполнена.\n";
+    std::cout << "Shipment::dispatch: отгрузка #" << id_ << " выполнена " << date_ << ".\n";
     return true;
 }
 
 void Shipment::printInfo() const {
-    const int orderId = warehouseOrder_ == nullptr ? 0 : warehouseOrder_->getId();
-    std::cout << "Shipment::printInfo: отгрузка #" << id_ << " по заказу #" << orderId
-              << ", позиций " << items_.size() << ", статус " << shipmentStatusText(status_) << ".\n";
+    std::cout << "Shipment::printInfo: отгрузка #" << id_ << " от " << date_ << " по заказу #"
+              << warehouseOrder_->getId() << ", позиций " << items_.size()
+              << ", статус " << shipmentStatusText(status_) << ".\n";
 }
 
-// Notification
-
-Notification::Notification(int id, std::string message, std::string type, std::string recipientRole)
-    : id_(id), message_(std::move(message)), type_(std::move(type)), recipientRole_(std::move(recipientRole)) {
-    std::cout << "Notification::Notification: уведомление создано.\n";
-}
-
-void Notification::send() const {
-    std::cout << "Notification::send: «" << message_ << "» отправлено роли «" << recipientRole_ << "».\n";
-}
-
-void Notification::markAsRead() {
-    isRead_ = true;
-}
-
-void Notification::printInfo() const {
-    std::cout << "Notification::printInfo: #" << id_ << (isRead_ ? "   " : " * ")
-              << "[" << type_ << "] " << message_
-              << " (получатель: " << recipientRole_ << ")\n";
-}
-
-bool Notification::isRead() const { return isRead_; }
+const std::vector<std::unique_ptr<ShipmentItem>>& Shipment::getItems() const { return items_; }
